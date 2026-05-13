@@ -322,8 +322,71 @@ def build_message_passing_split(
     return out
 
 
+def _triples(edge_index, edge_time) -> set[tuple[int, int, int]]:
+    src = edge_index[0].tolist()
+    dst = edge_index[1].tolist()
+    times = edge_time.tolist()
+    return set(zip(src, dst, times, strict=True))
+
+
+def assert_no_leakage(
+    df: pd.DataFrame,
+    *,
+    disjoint_train_ratio: float = 0.2,
+    seed: int = 42,
+) -> None:
+    """Raise ``AssertionError`` if the split pipeline leaks labels.
+
+    Runs the same invariants ``tests/test_leakage.py`` enforces:
+
+    1. Within every fold, ``mp_edges ∩ sup_edges == ∅`` as ``(src, dst, time)``
+       triples — the direct label-leakage check.
+    2. For ``val`` / ``test`` folds, ``min(sup_edge_time) >= max(train_mp_edge_time)``.
+    3. Supervision triples are pairwise disjoint across folds.
+
+    Importing it from the package (instead of from ``tests``) lets notebooks
+    run the same assertion inline.
+    """
+    sp = chronological_edge_split(df)
+    splits = build_message_passing_split(df, sp, disjoint_train_ratio=disjoint_train_ratio, seed=seed)
+
+    triples_by_split: dict[str, dict[str, set[tuple[int, int, int]]]] = {}
+    for split_name, t in splits.items():
+        mp = _triples(t["mp_edge_index"], t["mp_edge_time"])
+        sup = _triples(t["sup_edge_index"], t["sup_edge_time"])
+        if not mp.isdisjoint(sup):
+            raise AssertionError(
+                f"{split_name}: {len(mp & sup)} edge(s) appear in BOTH mp and sup"
+            )
+        triples_by_split[split_name] = {"mp": mp, "sup": sup}
+
+        if split_name in ("val", "test"):
+            train_mp_times = splits["train"]["mp_edge_time"].tolist()
+            if not train_mp_times:
+                raise AssertionError("train mp is unexpectedly empty")
+            max_train_mp = max(train_mp_times)
+            min_sup = int(t["sup_edge_time"].min())
+            if min_sup < max_train_mp:
+                raise AssertionError(
+                    f"{split_name}: min(sup_time)={min_sup} < max(train_mp_time)={max_train_mp}"
+                )
+
+    train_sup = triples_by_split["train"]["sup"]
+    val_sup = triples_by_split["val"]["sup"]
+    test_sup = triples_by_split["test"]["sup"]
+    if not train_sup.isdisjoint(test_sup):
+        raise AssertionError(
+            f"{len(train_sup & test_sup)} edge triples appear in both train_sup and test_sup"
+        )
+    if not train_sup.isdisjoint(val_sup):
+        raise AssertionError("train_sup and val_sup overlap")
+    if not val_sup.isdisjoint(test_sup):
+        raise AssertionError("val_sup and test_sup overlap")
+
+
 __all__ = [
     "SplitResult",
+    "assert_no_leakage",
     "build_message_passing_split",
     "chronological_edge_split",
     "stratified_random_edge_split",

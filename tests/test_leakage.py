@@ -24,6 +24,9 @@ import pandas as pd
 import pytest
 
 from reddit_gnn.data.splits import (
+    assert_no_leakage as _package_assert_no_leakage,
+)
+from reddit_gnn.data.splits import (
     build_message_passing_split,
     chronological_edge_split,
 )
@@ -70,45 +73,8 @@ def _triples(edge_index, edge_time) -> set[tuple[int, int, int]]:
 
 
 def _assert_no_leakage(df: pd.DataFrame, *, disjoint_train_ratio: float = 0.2) -> None:
-    """The core leakage suite — used for both synthetic and real data."""
-    sp = chronological_edge_split(df)
-    splits = build_message_passing_split(df, sp, disjoint_train_ratio=disjoint_train_ratio, seed=42)
-
-    triples_by_split: dict[str, dict[str, set[tuple[int, int, int]]]] = {}
-    for split_name, t in splits.items():
-        mp = _triples(t["mp_edge_index"], t["mp_edge_time"])
-        sup = _triples(t["sup_edge_index"], t["sup_edge_time"])
-
-        # (1) Inside the split: mp ∩ sup must be empty.
-        assert mp.isdisjoint(sup), (
-            f"{split_name}: {len(mp & sup)} edge(s) appear in BOTH mp and sup — "
-            f"this is direct label leakage through the encoder."
-        )
-        triples_by_split[split_name] = {"mp": mp, "sup": sup}
-
-        # (2) Temporal monotonicity for val and test:
-        #     min(sup_time) >= max(train_mp_time).
-        if split_name in ("val", "test"):
-            train_mp_times = splits["train"]["mp_edge_time"].tolist()
-            assert train_mp_times, "train mp is unexpectedly empty"
-            max_train_mp = max(train_mp_times)
-            min_sup = int(t["sup_edge_time"].min())
-            assert min_sup >= max_train_mp, (
-                f"{split_name}: min(sup_time)={min_sup} < max(train_mp_time)="
-                f"{max_train_mp} — a future supervision edge would leak into a past "
-                "message-passing window."
-            )
-
-    # (3) Supervision triples are pairwise disjoint across splits.
-    train_sup = triples_by_split["train"]["sup"]
-    val_sup = triples_by_split["val"]["sup"]
-    test_sup = triples_by_split["test"]["sup"]
-    assert train_sup.isdisjoint(test_sup), (
-        f"{len(train_sup & test_sup)} edge triples appear in both train_sup and "
-        "test_sup — supervised twice with possibly conflicting labels."
-    )
-    assert train_sup.isdisjoint(val_sup)
-    assert val_sup.isdisjoint(test_sup)
+    """Thin wrapper around the package function — keeps the test stable across refactors."""
+    _package_assert_no_leakage(df, disjoint_train_ratio=disjoint_train_ratio, seed=42)
 
 
 # ---------------------------------------------------------------------------
