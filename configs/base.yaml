@@ -39,14 +39,25 @@ split:
 features:
   use_liwc_embeddings: true
   embedding_dim: 300
-  # Engineered edge-level features computed strictly on the train graph
-  # (no leakage from val/test rows).
+  # Engineered edge-level features actually produced by
+  # reddit_gnn.data.features.FeatureBuilder (truthful list — only what the
+  # builder emits at runtime). 93 columns total per edge.
   engineered_edge_features:
-    - text_property_vector       # length-86 from POST_PROPERTIES
-    - src_outdeg
-    - dst_indeg
-    - src_dst_common_neighbors
-    - log_post_age_days
+    - raw_post_properties        # 86 raw LIWC dims from POST_PROPERTIES
+    - is_title                   # 1 binary flag (body vs title source)
+    - year_norm                  # 6 temporal columns (scaler is train-fit):
+    - month_sin                  #   year_norm, month sin/cos,
+    - month_cos                  #   day-of-week sin/cos,
+    - dayofweek_sin              #   days-since-min normalized to [0, 1]
+    - dayofweek_cos
+    - days_since_min_norm
+  # Per-node features (FeatureBuilder.transform_node_features):
+  #   * 300-D SNAP LIWC embedding (zeros + unknown_flag when missing)
+  #   * 11 structural columns (in/out/total degree, signed in/out degree,
+  #     signed-in/-out ratios, log1p degrees) — StandardScaler fit on TRAIN
+  #     edges only.
+  #   * 172 aggregated edge-property columns (mean incoming + mean outgoing
+  #     POST_PROPERTIES per node).
   standardize: true              # fit on train only
 
 training:
@@ -60,7 +71,8 @@ training:
   scheduler: none                # cosine | plateau | none
   grad_clip: 1.0
   seed: 42
-  class_weight: balanced         # mitigate class imbalance (positives dominate)
+  # Loss is BCEWithLogits with pos_weight = #neg/#pos computed at runtime
+  # from the TRAIN supervision labels (no YAML knob — see compute_pos_weight).
   log_every_n_epochs: 1
 
 evaluation:
@@ -72,7 +84,7 @@ evaluation:
     - roc_auc
     - pr_auc
     - confusion_matrix
-  primary_metric: f1_macro
+  primary_metric: pr_auc_neg     # PR-AUC for the negative class — headline metric
   save_predictions: true
 
 run:

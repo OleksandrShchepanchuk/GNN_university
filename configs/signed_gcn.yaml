@@ -20,6 +20,6 @@ model:
 
 training:
   epochs: 200
-  lr: 0.01
+  lr: 0.005                      # safer than 0.01 — SignedGCN with no BN can diverge
   weight_decay: 0.00001
   early_stopping_patience: 20

@@ -35,6 +35,15 @@ REQUIRED_COLUMNS = (
     "POST_PROPERTIES",
 )
 
+# Some SNAP mirrors ship the body/title TSVs with renamed columns
+# (``LINK_SENTIMENT`` instead of ``POST_LABEL``, ``PROPERTIES`` instead of
+# ``POST_PROPERTIES``). We accept either name on the way in and normalize
+# everything to the canonical schema documented above.
+SNAP_COLUMN_ALIASES = {
+    "LINK_SENTIMENT": "POST_LABEL",
+    "PROPERTIES": "POST_PROPERTIES",
+}
+
 _PROPERTY_COLUMNS = tuple(f"p{i}" for i in range(POST_PROPERTIES_DIM))
 
 
@@ -95,6 +104,7 @@ def parse_hyperlinks_tsv(path: str | Path, source_tag: str) -> pd.DataFrame:
 
     df = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, na_values=[""])
     df = _normalize_columns(df)
+    df = df.rename(columns=SNAP_COLUMN_ALIASES)
 
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
@@ -225,6 +235,7 @@ __all__ = [
     "EMBEDDING_DIM",
     "POST_PROPERTIES_DIM",
     "REQUIRED_COLUMNS",
+    "SNAP_COLUMN_ALIASES",
     "load_reddit_dataset",
     "parse_hyperlinks_tsv",
     "parse_subreddit_embeddings",

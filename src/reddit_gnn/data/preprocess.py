@@ -101,11 +101,31 @@ def clean_edges(df: pd.DataFrame) -> pd.DataFrame:
         label_binary = label_binary.loc[~unknown_mask]
     out = out.assign(label_binary=label_binary.astype("int8")).drop(columns=["POST_LABEL"])
 
+    # Stage 1: drop exact-duplicate (src, tgt, time, POST_ID) rows — same post
+    # repeated within the source file.
     before_dedup = len(out)
     out = out.drop_duplicates(subset=list(_DEDUPE_KEY), keep="first")
     n_dupes = before_dedup - len(out)
     if n_dupes:
-        log.info("clean_edges: dropped %d duplicate row(s)", n_dupes)
+        log.info("clean_edges: dropped %d duplicate row(s) (src,tgt,time,POST_ID)", n_dupes)
+
+    # Stage 2: drop rows that share the same (src, tgt, time) *triple* with a
+    # row kept above. These come from the same hyperlink event being reported
+    # in both the body and title TSVs, or from bursts of different posts at
+    # the same exact timestamp. The leakage invariant in
+    # ``reddit_gnn.data.splits.assert_no_leakage`` defines an "edge" by its
+    # triple, so we make the data triple-unique to match.
+    before_triple_dedup = len(out)
+    out = out.drop_duplicates(
+        subset=["source_subreddit_norm", "target_subreddit_norm", "TIMESTAMP"],
+        keep="first",
+    )
+    n_triple_dupes = before_triple_dedup - len(out)
+    if n_triple_dupes:
+        log.info(
+            "clean_edges: dropped %d additional row(s) at the (src,tgt,time) triple level",
+            n_triple_dupes,
+        )
 
     out["is_title"] = (out["source_file"] == "title").astype("int8")
 

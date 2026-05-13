@@ -218,6 +218,42 @@ def test_load_reddit_dataset_missing_file_raises_helpful_error(tmp_path: Path) -
     assert "prepare_data" in str(excinfo.value)
 
 
+def test_parse_hyperlinks_tsv_accepts_new_snap_column_names(tmp_path: Path) -> None:
+    """Some SNAP mirrors rename ``POST_LABEL`` to ``LINK_SENTIMENT`` and
+    ``POST_PROPERTIES`` to ``PROPERTIES``. ``parse_hyperlinks_tsv`` must
+    normalize both to the canonical names so the rest of the pipeline doesn't
+    have to care which mirror the dataset came from.
+    """
+    new_header = (
+        "SOURCE_SUBREDDIT\tTARGET_SUBREDDIT\tPOST_ID\tTIMESTAMP\tLINK_SENTIMENT\tPROPERTIES"
+    )
+    props = _properties_csv([0.1] * POST_PROPERTIES_DIM)
+    rows = [
+        ("askreddit", "news", "p0", "2014-01-01 12:00:00", "1", props),
+        ("gaming", "movies", "p1", "2014-02-15 03:30:00", "-1", props),
+    ]
+    path = tmp_path / "new_snap_names.tsv"
+    path.write_text(
+        "\n".join([new_header] + ["\t".join(r) for r in rows]) + "\n",
+        encoding="utf-8",
+    )
+
+    df = parse_hyperlinks_tsv(path, source_tag="body")
+
+    # Canonical column names are present, renamed-in names are gone.
+    assert "POST_LABEL" in df.columns
+    assert "POST_PROPERTIES" in df.columns
+    assert "LINK_SENTIMENT" not in df.columns
+    assert "PROPERTIES" not in df.columns
+
+    # The values flowed through correctly.
+    assert len(df) == 2
+    assert set(df["POST_LABEL"].dropna().astype(int).unique().tolist()) <= {-1, 1}
+    # Expanded property columns are still produced.
+    assert "p0" in df.columns
+    assert "p85" in df.columns
+
+
 def test_parse_subreddit_embeddings_roundtrip(tmp_path: Path) -> None:
     """Embeddings parser returns the right shape and lowercased keys."""
     n = 3
