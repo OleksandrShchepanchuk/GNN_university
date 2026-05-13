@@ -9,6 +9,7 @@ import torch
 from torch import nn
 
 from reddit_gnn.training.checkpointing import load_checkpoint
+from reddit_gnn.training.loops import _prepare_loader_for_device
 from reddit_gnn.training.loops import evaluate as run_evaluate
 from reddit_gnn.utils.logging import get_logger
 
@@ -22,7 +23,10 @@ def evaluate_checkpoint(
     device: torch.device | str = "cpu",
 ) -> dict[str, dict[str, Any]]:
     """Load weights from ``checkpoint_path`` into ``model``; evaluate every loader."""
+    device = torch.device(device) if not isinstance(device, torch.device) else device
     model = model.to(device)
+    for loader in loaders.values():
+        _prepare_loader_for_device(loader, device)
     meta = load_checkpoint(checkpoint_path, model, optimizer=None, map_location=device)
     log.info(
         "evaluate_checkpoint: loaded %s (val_metric_at_save=%s)",

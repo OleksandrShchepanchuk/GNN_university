@@ -36,11 +36,37 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _prepare_loader_for_device(loader, device: torch.device) -> None:
+    """Pre-move per-split per-edge feature tensors to ``device`` once.
+
+    Avoids CPU<->GPU round-trips inside the inner loop when a CUDA device is
+    in use; on CPU this is a near no-op (PyTorch ``.to('cpu')`` returns the
+    same tensor when already on CPU).
+    """
+    data = getattr(loader, "data", None)
+    if data is None:
+        return
+    for attr in (
+        "x",
+        "edge_index",
+        "edge_attr",
+        "edge_time",
+        "edge_label_attr",
+        "edge_label_index",
+        "edge_label",
+        "edge_label_time",
+    ):
+        t = getattr(data, attr, None)
+        if isinstance(t, torch.Tensor) and t.device != device:
+            setattr(data, attr, t.to(device, non_blocking=True))
+
+
 def _batch_edge_label_attr(loader, batch, device: torch.device) -> torch.Tensor | None:
     """Look up the engineered edge features for the supervision edges in this batch.
 
     ``loader.data.edge_label_attr`` is the full ``[S_total, F_e]`` tensor for
-    the split; ``batch.input_id`` indexes into it.
+    the split; ``batch.input_id`` indexes into it. Both are expected to be on
+    the same device after ``_prepare_loader_for_device``.
     """
     full = getattr(loader.data, "edge_label_attr", None)
     if full is None:
@@ -159,6 +185,8 @@ def fit(
     device = torch.device(train_cfg.get("device", "cpu"))
 
     model = model.to(device)
+    for loader in loaders.values():
+        _prepare_loader_for_device(loader, device)
 
     # Default loss: weighted BCE using train supervision labels.
     train_loader = loaders["train"]
