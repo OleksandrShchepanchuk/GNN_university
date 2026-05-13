@@ -4,7 +4,7 @@ SHELL := /bin/bash
 PYTHON ?= python3
 UV := $(shell command -v uv 2>/dev/null)
 
-.PHONY: help install data train sweep evaluate notebook test lint clean all
+.PHONY: help install data train sweep evaluate notebook test lint clean all mlflow-ui mlflow-clean
 
 help:
 	@echo "Available targets:"
@@ -14,10 +14,13 @@ help:
 	@echo "  sweep     - Run scripts/run_sweep.py (CONFIG=configs/sweep.yaml)"
 	@echo "  evaluate  - Re-evaluate a trained checkpoint (RUN=run_name)"
 	@echo "  notebook  - Launch JupyterLab in ./notebooks"
-	@echo "  test      - Run pytest"
-	@echo "  lint      - Run ruff check + ruff format --check"
-	@echo "  clean     - Remove caches, build artifacts, and processed data"
-	@echo "  all       - install + data + test"
+	@echo "  test         - Run pytest"
+	@echo "  lint         - Run ruff check + ruff format --check"
+	@echo "  clean        - Remove caches, build artifacts, and processed data"
+	@echo "                 (preserves ./mlruns by design; use mlflow-clean to wipe)"
+	@echo "  mlflow-ui    - Launch MLflow UI at http://127.0.0.1:5000"
+	@echo "  mlflow-clean - Delete the local ./mlruns store"
+	@echo "  all          - install + data + test"
 
 install:
 	@echo ">>> Installing project (dev extras)"
@@ -63,11 +66,20 @@ lint:
 	$(PYTHON) -m ruff format --check .
 
 clean:
-	@echo ">>> Cleaning caches and build artifacts"
+	@echo ">>> Cleaning caches and build artifacts (preserving ./mlruns)"
 	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist *.egg-info
 	find . -type d -name "__pycache__" -prune -exec rm -rf {} +
 	rm -rf data/interim/* data/processed/*
 	@touch data/interim/.gitkeep data/processed/.gitkeep
+	@echo "    (run 'make mlflow-clean' separately to wipe MLflow run history)"
+
+mlflow-ui:
+	@echo ">>> Starting MLflow UI at http://127.0.0.1:5000"
+	$(PYTHON) -m mlflow ui --backend-store-uri file:./mlruns --host 127.0.0.1 --port 5000
+
+mlflow-clean:
+	rm -rf mlruns
+	@echo ">>> Cleared local MLflow store"
 
 all: install data test
 	@echo ">>> all done"

@@ -72,3 +72,6 @@ logs/
 wandb/
 mlruns/
 optuna_*.db
+
+# Claude Code session state
+.claude/

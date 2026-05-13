@@ -52,6 +52,21 @@ class Paths:
 
 
 @dataclass
+class TrackingConfig:
+    """Experiment-tracking knobs (MLflow).
+
+    The training scripts construct one of these from the ``tracking:`` section
+    of the YAML config and hand it to :func:`reddit_gnn.tracking.init_tracking`.
+    A CLI ``--no-tracking`` flag flips ``enabled`` to ``False``.
+    """
+
+    enabled: bool = True
+    tracking_uri: str | None = None  # None -> local file store under <project>/mlruns
+    experiment_name: str = "reddit_signed"
+    run_name_template: str = "{model_type}-{timestamp}"
+
+
+@dataclass
 class TrainConfig:
     """Training hyperparameters consumed by the experiment scripts."""
 
@@ -70,4 +85,4 @@ class TrainConfig:
     extra: dict = field(default_factory=dict)
 
 
-__all__ = ["PROJECT_ROOT", "Paths", "TrainConfig"]
+__all__ = ["PROJECT_ROOT", "Paths", "TrackingConfig", "TrainConfig"]

@@ -80,3 +80,12 @@ run:
   output_root: models
   checkpoints_subdir: checkpoints
   predictions_subdir: predictions
+
+tracking:
+  # MLflow tracking. See reddit_gnn.tracking.* and the "Experiment tracking
+  # with MLflow" section in README.md for details. CLI flag --no-tracking
+  # overrides `enabled: true` for a single invocation.
+  enabled: true
+  tracking_uri: null             # null -> file:<project_root>/mlruns
+  experiment_name: reddit_signed
+  run_name_template: "{model_type}-{timestamp}"

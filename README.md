@@ -57,7 +57,45 @@ make lint
 
 Style reference only (no code copied): https://github.com/SerbulovArtem/Graph_Machine_Learning_IND_1
 
+## Experiment tracking with MLflow
+
+The project ships with a thin tracking layer at `src/reddit_gnn/tracking/` that
+wraps MLflow. All training / sweep code routes through this module instead of
+calling `mlflow.*` directly, so MLflow can be disabled (or swapped for another
+backend) without touching training code.
+
+**What is tracked:**
+- **Params** — the merged YAML config (model_type, hidden_channels, lr, weight_decay, …).
+- **Metrics per epoch** — train/val loss, F1-macro, PR-AUC, balanced accuracy, etc.
+- **System metrics** — CPU / GPU / RAM utilisation, auto-logged.
+- **Artifacts** — best checkpoint, training-curve PNG, predictions CSV (`reports/predictions/*`), confusion matrix, `metrics.json`.
+- **Tags** — `model_type`, `seed`, `git_sha` when available, and `exception_type` if the run failed.
+
+**Layout:** one experiment `reddit_signed` with one parent run per script
+invocation. Sweeps create a parent run `sweep_{arch}` plus one nested child
+run per Optuna trial.
+
+**View the runs:**
+```bash
+make mlflow-ui
+# -> open http://127.0.0.1:5000
+```
+
+**Disable tracking for one run:**
+```bash
+python scripts/run_experiment.py --config configs/gcn.yaml --no-tracking
+```
+or set `tracking.enabled: false` in the YAML config. With tracking disabled
+every helper in `reddit_gnn.tracking` is a no-op — no `mlruns/` directory is
+created.
+
+**Wipe the local store:**
+```bash
+make mlflow-clean   # rm -rf ./mlruns; preserved by `make clean` on purpose
+```
+
 ## Status
 
-Scaffold only. All domain logic raises `NotImplementedError` and is intentionally
-deferred — this commit establishes the project skeleton, configs, and tooling.
+Scaffold + dataset pipeline + tracking are in place. Model code, training
+loops, and the sweep entry points still raise `NotImplementedError` and will
+land in subsequent commits.
