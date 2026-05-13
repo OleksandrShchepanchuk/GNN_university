@@ -19,7 +19,13 @@ from reddit_gnn.data.load import (
     parse_hyperlinks_tsv,
     parse_subreddit_embeddings,
 )
-from reddit_gnn.data.preprocess import remap_post_label
+from reddit_gnn.data.preprocess import (
+    build_node_mapping,
+    clean_edges,
+    preprocess_dataset,
+    remap_post_label,
+    save_processed_dataset,
+)
 
 _HEADER = "SOURCE_SUBREDDIT\tTARGET_SUBREDDIT\tPOST_ID\tTIMESTAMP\tPOST_LABEL\tPOST_PROPERTIES"
 
@@ -231,3 +237,156 @@ def test_parse_subreddit_embeddings_roundtrip(tmp_path: Path) -> None:
     assert set(name_to_idx.keys()) == {n.lower() for n in names}
     # The 'askreddit' row should approximately match the first random vector.
     np.testing.assert_allclose(mat[name_to_idx["askreddit"]], values[0], atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing tests
+# ---------------------------------------------------------------------------
+
+
+def _preprocess_input_frame(tmp_path: Path) -> pd.DataFrame:
+    """Build a synthetic raw frame (post-load) that exercises clean_edges.
+
+    Includes:
+        * Self-loop row (must be dropped).
+        * Two duplicate (src, dst, ts, post_id) rows (one must be dropped).
+        * Body and title rows (for ``is_title`` tagging).
+        * Out-of-order timestamps (must end up sorted).
+    """
+    body_rows = [
+        _row("askreddit", "askreddit", "self0", "2014-03-01 00:00:00", 1),  # self-loop
+        _row("askreddit", "news", "p1", "2014-02-01 00:00:00", 1),
+        _row("AskReddit", "news", "p1", "2014-02-01 00:00:00", 1),  # dup after normalize
+        _row("gaming", "movies", "p2", "2014-04-01 00:00:00", -1),
+    ]
+    title_rows = [
+        _row("music", "books", "t0", "2014-01-15 00:00:00", -1),
+        _row("science", "space", "t1", "2014-05-10 00:00:00", 1),
+    ]
+    _write_tsv(tmp_path / BODY_FILENAME, body_rows)
+    _write_tsv(tmp_path / TITLE_FILENAME, title_rows)
+    return load_reddit_dataset(tmp_path, network_type="both")
+
+
+def test_label_remap(tmp_path: Path) -> None:
+    """clean_edges remaps -1 -> 0, +1 -> 1, and leaves only {0, 1} in label_binary."""
+    raw = _preprocess_input_frame(tmp_path)
+    cleaned = clean_edges(raw)
+
+    # Column shape: label_binary present, POST_LABEL dropped.
+    assert "label_binary" in cleaned.columns
+    assert "POST_LABEL" not in cleaned.columns
+    assert cleaned["label_binary"].dtype == np.int8
+
+    labels = set(cleaned["label_binary"].unique().tolist())
+    assert labels <= {0, 1}
+
+    # Spot-check the row-by-row remap: gaming->movies had POST_LABEL=-1 -> 0.
+    gaming_row = cleaned[
+        (cleaned["source_subreddit_norm"] == "gaming")
+        & (cleaned["target_subreddit_norm"] == "movies")
+    ]
+    assert len(gaming_row) == 1
+    assert int(gaming_row["label_binary"].iloc[0]) == 0
+
+    # askreddit->news had POST_LABEL=+1 -> 1.
+    ar_row = cleaned[
+        (cleaned["source_subreddit_norm"] == "askreddit")
+        & (cleaned["target_subreddit_norm"] == "news")
+    ]
+    assert len(ar_row) == 1
+    assert int(ar_row["label_binary"].iloc[0]) == 1
+
+
+def test_no_self_loops(tmp_path: Path) -> None:
+    """clean_edges drops every row where source equals target."""
+    raw = _preprocess_input_frame(tmp_path)
+    cleaned = clean_edges(raw)
+    assert (cleaned["source_subreddit_norm"] != cleaned["target_subreddit_norm"]).all()
+    # Specifically, the askreddit -> askreddit synthetic self-loop is gone.
+    assert (
+        (cleaned["source_subreddit_norm"] == "askreddit")
+        & (cleaned["target_subreddit_norm"] == "askreddit")
+    ).sum() == 0
+
+
+def test_chronological_order(tmp_path: Path) -> None:
+    """TIMESTAMP is monotonically non-decreasing after clean_edges."""
+    raw = _preprocess_input_frame(tmp_path)
+    cleaned = clean_edges(raw)
+    ts = cleaned["TIMESTAMP"].to_numpy()
+    assert (np.diff(ts).astype("timedelta64[ns]").astype("int64") >= 0).all()
+    # And the first row really is the earliest one in the input (music->books).
+    assert cleaned.iloc[0]["source_subreddit_norm"] == "music"
+
+
+def test_node_mapping_bijection(tmp_path: Path) -> None:
+    """build_node_mapping produces a contiguous bijection over the union of names."""
+    raw = _preprocess_input_frame(tmp_path)
+    cleaned = clean_edges(raw)
+    mapped, node_to_id, id_to_node = build_node_mapping(cleaned)
+
+    # Bijection: same cardinality, inverse maps round-trip.
+    assert len(node_to_id) == len(id_to_node)
+    for name, idx in node_to_id.items():
+        assert id_to_node[idx] == name
+    for idx, name in id_to_node.items():
+        assert node_to_id[name] == idx
+
+    # Contiguous from 0.
+    ids = sorted(node_to_id.values())
+    assert ids == list(range(len(ids)))
+
+    # Every subreddit appearing as src or dst is in the mapping.
+    expected_names = set(cleaned["source_subreddit_norm"]) | set(cleaned["target_subreddit_norm"])
+    assert set(node_to_id.keys()) == expected_names
+
+    # source_id / target_id are int64 and consistent with the mapping.
+    assert "source_id" in mapped.columns
+    assert "target_id" in mapped.columns
+    assert mapped["source_id"].dtype == np.int64
+    assert mapped["target_id"].dtype == np.int64
+    for _, row in mapped.iterrows():
+        assert node_to_id[row["source_subreddit_norm"]] == row["source_id"]
+        assert node_to_id[row["target_subreddit_norm"]] == row["target_id"]
+
+
+def test_preprocess_dataset_writes_artifacts(tmp_path: Path) -> None:
+    """End-to-end: preprocess_dataset writes parquet + JSON sidecars and is reloadable."""
+    raw = _preprocess_input_frame(tmp_path)
+    out_dir = tmp_path / "processed"
+    edges_path = preprocess_dataset(
+        raw_dir=tmp_path,
+        processed_dir=out_dir,
+        network_type="both",
+        df=raw,
+    )
+
+    assert edges_path == out_dir / "edges.parquet"
+    assert edges_path.exists()
+    for sidecar in ("node_to_id.json", "id_to_node.json", "metadata.json"):
+        assert (out_dir / sidecar).exists()
+
+    reloaded = pd.read_parquet(edges_path)
+    assert "label_binary" in reloaded.columns
+    assert "source_id" in reloaded.columns
+    assert "target_id" in reloaded.columns
+    assert set(reloaded["label_binary"].unique().tolist()) <= {0, 1}
+
+
+def test_save_processed_dataset_metadata_is_consistent(tmp_path: Path) -> None:
+    """metadata.json reports counts that match the saved parquet."""
+    import json
+
+    raw = _preprocess_input_frame(tmp_path)
+    cleaned = clean_edges(raw)
+    mapped, n2i, i2n = build_node_mapping(cleaned)
+
+    out_dir = tmp_path / "processed"
+    save_processed_dataset(mapped, n2i, i2n, out_dir, network_type="both")
+
+    metadata = json.loads((out_dir / "metadata.json").read_text())
+    assert metadata["num_nodes"] == len(n2i)
+    assert metadata["num_edges"] == len(mapped)
+    assert metadata["network_type"] == "both"
+    assert set(metadata["label_distribution"].keys()) <= {"0", "1"}
