@@ -5,19 +5,18 @@ run:
 
 model:
   type: signed_gcn
-  # PyG's SignedGCN learns separate aggregations along positive and negative
-  # edges. The encoder builds the signed message-passing graph from TRAIN
-  # labels only — val/test labels are never exposed during message passing.
   encoder:
+    in_channels: null
     hidden_channels: 64
     num_layers: 2
-    lamb: 5.0                  # balanced/unbalanced triangle regularization weight
+    # PyG's SignedGCN learns separate aggregations along positive and negative
+    # edges. The MP graph is partitioned by label_binary; an empty pos/neg
+    # half-graph triggers a warning and a dummy self-loop (see SignedGCNEncoder).
+    lamb: 5.0
   decoder:
-    type: mlp_edge
-    hidden_channels: 64
-    num_layers: 2
+    type: edge_mlp
+    hidden: 64
     dropout: 0.3
-    edge_feature_combiner: concat
 
 training:
   epochs: 200

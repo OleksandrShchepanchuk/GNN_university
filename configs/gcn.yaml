@@ -6,19 +6,17 @@ run:
 model:
   type: gcn
   encoder:
-    layers:
-      - { type: GCNConv, out_channels: 128 }
-      - { type: GCNConv, out_channels: 64 }
-    dropout: 0.5
-    activation: relu
-    add_self_loops: true
-    normalize: true
-  decoder:
-    type: mlp_edge
-    hidden_channels: 64
+    in_channels: null            # filled in at runtime from node_features.shape[1]
+    hidden_channels: 128
+    out_channels: 64
     num_layers: 2
+    dropout: 0.5
+    use_batchnorm: true
+  decoder:
+    type: edge_mlp
+    hidden: 64
     dropout: 0.3
-    edge_feature_combiner: concat   # concat | hadamard | abs_diff | concat_plus_edgefeat
+    # edge_feature_dim filled in at runtime from edge_features.shape[1] (93 with all toggles on)
 
 training:
   epochs: 200

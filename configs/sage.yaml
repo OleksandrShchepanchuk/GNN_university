@@ -6,17 +6,17 @@ run:
 model:
   type: sage
   encoder:
-    layers:
-      - { type: SAGEConv, out_channels: 128, aggr: mean }
-      - { type: SAGEConv, out_channels: 64, aggr: mean }
-    dropout: 0.5
-    activation: relu
-  decoder:
-    type: mlp_edge
-    hidden_channels: 64
+    in_channels: null
+    hidden_channels: 128
+    out_channels: 64
     num_layers: 2
+    dropout: 0.5
+    use_batchnorm: true
+    aggr: mean                   # one of: mean | max | sum | lstm
+  decoder:
+    type: edge_mlp
+    hidden: 64
     dropout: 0.3
-    edge_feature_combiner: concat_plus_edgefeat
 
 training:
   epochs: 200

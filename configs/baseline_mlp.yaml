@@ -5,11 +5,10 @@ run:
 
 model:
   type: baseline_mlp
-  hidden_channels: 256
-  num_layers: 3
+  # MLP input is [edge_feats || x_src || x_tgt || |x_src - x_tgt| || x_src * x_tgt].
+  hidden: 256
   dropout: 0.3
-  activation: relu
-  # Inputs: concatenated [src_embed, dst_embed, engineered_edge_features].
+  # edge_feature_dim / node_feature_dim filled in at runtime.
 
 training:
   epochs: 100

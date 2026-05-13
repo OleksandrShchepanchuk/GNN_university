@@ -5,12 +5,15 @@ run:
 
 model:
   type: baseline_logreg
-  # Inputs: concatenated [src_embed, dst_embed, engineered_edge_features].
-  class_weight: balanced
-  max_iter: 2000
-  C: 1.0
-  penalty: l2
-  solver: lbfgs
+  # If true, the input is [edge_feats || x_src || x_tgt || |x_src - x_tgt| || x_src * x_tgt];
+  # otherwise just raw edge features (POST_PROPERTIES + temporal + is_title).
+  use_node_features: true
+  sklearn:
+    C: 1.0
+    penalty: l2
+    solver: lbfgs
+    max_iter: 2000
+    class_weight: balanced
 
 training:
   # The sklearn baseline trains in one fit() call; PyTorch loops do not apply.

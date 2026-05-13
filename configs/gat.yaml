@@ -6,18 +6,19 @@ run:
 model:
   type: gat
   encoder:
-    layers:
-      - { type: GATv2Conv, out_channels: 64, heads: 4, concat: true }
-      - { type: GATv2Conv, out_channels: 64, heads: 1, concat: false }
+    in_channels: null
+    hidden_channels: 128         # total post-concat width per layer
+    out_channels: 64
+    num_layers: 2
+    heads: 4
+    concat: true                 # also accepts a list[bool] of length num_layers
     dropout: 0.5
     attn_dropout: 0.2
-    activation: elu
+    use_batchnorm: false
   decoder:
-    type: mlp_edge
-    hidden_channels: 64
-    num_layers: 2
+    type: edge_mlp
+    hidden: 64
     dropout: 0.3
-    edge_feature_combiner: concat
 
 training:
   epochs: 200
