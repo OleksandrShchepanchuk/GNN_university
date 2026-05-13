@@ -201,14 +201,20 @@ class MLPEdgeBaseline(nn.Module):
 
     def forward(
         self,
-        edge_feats: torch.Tensor,
         x: torch.Tensor,
+        edge_index: torch.Tensor,  # noqa: ARG002 — kept for EdgeClassifier-style signature
         edge_label_index: torch.Tensor,
+        edge_attr_for_label: torch.Tensor,
     ) -> torch.Tensor:
+        """Same call signature as :class:`EdgeClassifier`; ``edge_index`` is ignored.
+
+        Keeping a uniform signature lets the training loop call every torch
+        model the same way, without per-model dispatch.
+        """
         src, tgt = edge_label_index[0], edge_label_index[1]
         x_src = x.index_select(0, src)
         x_tgt = x.index_select(0, tgt)
-        feats = _concat_node_blocks_torch(edge_feats, x_src, x_tgt)
+        feats = _concat_node_blocks_torch(edge_attr_for_label, x_src, x_tgt)
         return self.net(feats).squeeze(-1)
 
 

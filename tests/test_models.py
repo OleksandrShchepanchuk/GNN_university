@@ -276,7 +276,10 @@ def test_mlp_edge_baseline_forward_shape():
     model = MLPEdgeBaseline(
         edge_feature_dim=d_edge, node_feature_dim=d_node, hidden=16, dropout=0.0
     )
-    logits = model(edge_feats, x, edge_label_index)
+    # The MLP baseline shares the EdgeClassifier call signature so the training
+    # loop can dispatch uniformly; the ``edge_index`` argument is ignored.
+    dummy_edge_index = torch.zeros((2, 0), dtype=torch.long)
+    logits = model(x, dummy_edge_index, edge_label_index, edge_feats)
     assert logits.shape == (n_edges,)
     assert torch.isfinite(logits).all()
 

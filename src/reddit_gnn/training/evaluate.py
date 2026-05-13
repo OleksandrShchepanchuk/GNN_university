@@ -1,27 +1,45 @@
-"""Metric computation: accuracy, balanced accuracy, F1 (macro + per-class),
-ROC-AUC, PR-AUC, confusion matrix.
-
-All metrics expect ``y_true ∈ {0,1}`` (i.e. POST_LABEL already remapped).
-"""
+"""Re-evaluate a saved checkpoint against any subset of loaders."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import torch
+from torch import nn
 
-def compute_metrics(y_true: Any, y_pred: Any, y_score: Any | None = None) -> dict[str, Any]:
-    """Return the full metric dict; ``y_score`` enables ROC/PR-AUC."""
-    raise NotImplementedError("training.evaluate.compute_metrics is not implemented yet")
+from reddit_gnn.training.checkpointing import load_checkpoint
+from reddit_gnn.training.loops import evaluate as run_evaluate
+from reddit_gnn.utils.logging import get_logger
 
-
-def confusion_matrix(y_true: Any, y_pred: Any) -> Any:
-    """Return a 2x2 confusion matrix with rows = true, cols = predicted."""
-    raise NotImplementedError("training.evaluate.confusion_matrix is not implemented yet")
-
-
-def evaluate_model(model: Any, loader: Any, device: str) -> dict[str, Any]:
-    """Run inference, then ``compute_metrics``. Returns metrics + predictions."""
-    raise NotImplementedError("training.evaluate.evaluate_model is not implemented yet")
+log = get_logger(__name__)
 
 
-__all__ = ["compute_metrics", "confusion_matrix", "evaluate_model"]
+def evaluate_checkpoint(
+    checkpoint_path: str | Path,
+    model: nn.Module,
+    loaders: dict[str, Any],
+    device: torch.device | str = "cpu",
+) -> dict[str, dict[str, Any]]:
+    """Load weights from ``checkpoint_path`` into ``model``; evaluate every loader."""
+    model = model.to(device)
+    meta = load_checkpoint(checkpoint_path, model, optimizer=None, map_location=device)
+    log.info(
+        "evaluate_checkpoint: loaded %s (val_metric_at_save=%s)",
+        checkpoint_path,
+        meta.get("val_metric_at_save"),
+    )
+
+    out: dict[str, dict[str, Any]] = {}
+    for split_name, loader in loaders.items():
+        out[split_name] = run_evaluate(model, loader, device, loss_fn=None)
+        log.info(
+            "evaluate_checkpoint: %s pr_auc(neg)=%.4f | f1_macro=%.4f",
+            split_name,
+            float(out[split_name]["metrics"]["pr_auc"]),
+            float(out[split_name]["metrics"]["f1_macro"]),
+        )
+    return out
+
+
+__all__ = ["evaluate_checkpoint"]
