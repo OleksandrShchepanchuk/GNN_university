@@ -1,0 +1,19 @@
+defaults: configs/base.yaml
+
+run:
+  name: baseline_mlp
+
+model:
+  type: baseline_mlp
+  hidden_channels: 256
+  num_layers: 3
+  dropout: 0.3
+  activation: relu
+  # Inputs: concatenated [src_embed, dst_embed, engineered_edge_features].
+
+training:
+  epochs: 100
+  batch_size: 4096
+  lr: 0.001
+  weight_decay: 0.0001
+  early_stopping_patience: 15

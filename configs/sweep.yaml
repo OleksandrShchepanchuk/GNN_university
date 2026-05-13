@@ -1,0 +1,25 @@
+# Optuna sweep config. scripts/run_sweep.py loads `base_config`, then for each
+# trial samples values from `search_space` and overrides the corresponding keys.
+
+base_config: configs/gcn.yaml
+
+study:
+  name: gcn_sign_classification
+  direction: maximize
+  metric: f1_macro
+  n_trials: 40
+  timeout_seconds: null
+  storage: sqlite:///optuna_gcn.db
+  load_if_exists: true
+  sampler: tpe
+  pruner: median
+
+search_space:
+  model.encoder.layers.0.out_channels: { type: categorical, choices: [64, 128, 256] }
+  model.encoder.layers.1.out_channels: { type: categorical, choices: [32, 64, 128] }
+  model.encoder.dropout:               { type: float,       low: 0.1, high: 0.7, step: 0.1 }
+  training.lr:                         { type: float,       low: 1.0e-4, high: 1.0e-2, log: true }
+  training.weight_decay:               { type: float,       low: 1.0e-6, high: 1.0e-3, log: true }
+  model.decoder.edge_feature_combiner:
+    type: categorical
+    choices: [concat, hadamard, abs_diff, concat_plus_edgefeat]

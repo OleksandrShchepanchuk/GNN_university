@@ -1,0 +1,82 @@
+# Base config — inherited (logically) by every model-specific config.
+# scripts/run_experiment.py merges base.yaml under the chosen config so that
+# per-model files only need to override differences.
+
+task:
+  name: edge_sign_classification
+  # POST_LABEL remap: -1 -> 0 (negative), +1 -> 1 (neutral_or_positive).
+  # We never sample non-edges; only observed hyperlinks are examples.
+  label_mapping:
+    "-1": 0
+    "1": 1
+  num_classes: 2
+
+data:
+  source: snap_reddit_hyperlinks
+  body_file: soc-redditHyperlinks-body.tsv
+  title_file: soc-redditHyperlinks-title.tsv
+  embeddings_file: web-redditEmbeddings-subreddits.csv
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  # Drop edges whose endpoints have no LIWC embedding (configurable).
+  drop_missing_embeddings: false
+  # Combine body + title rows (each is a directed hyperlink event).
+  combine_body_title: true
+  # Aggregation: keep each hyperlink event as a separate example, OR aggregate
+  # repeated (src,dst) pairs into one edge with majority label.
+  aggregation: per_event   # one of: per_event | per_pair_majority
+
+split:
+  strategy: temporal       # one of: temporal | random_stratified
+  train_frac: 0.7
+  val_frac: 0.15
+  test_frac: 0.15
+  seed: 42
+  # For temporal split, edges are ordered by TIMESTAMP and cut by quantile.
+  # For random_stratified, splits preserve class balance per fold.
+
+features:
+  use_liwc_embeddings: true
+  embedding_dim: 300
+  # Engineered edge-level features computed strictly on the train graph
+  # (no leakage from val/test rows).
+  engineered_edge_features:
+    - text_property_vector       # length-86 from POST_PROPERTIES
+    - src_outdeg
+    - dst_indeg
+    - src_dst_common_neighbors
+    - log_post_age_days
+  standardize: true              # fit on train only
+
+training:
+  device: cpu                    # set to "cuda" if available
+  epochs: 100
+  batch_size: 4096               # for edge-level mini-batching where applicable
+  early_stopping_patience: 15
+  lr: 0.005
+  weight_decay: 0.0005
+  optimizer: adam
+  scheduler: none                # cosine | plateau | none
+  grad_clip: 1.0
+  seed: 42
+  class_weight: balanced         # mitigate class imbalance (positives dominate)
+  log_every_n_epochs: 1
+
+evaluation:
+  metrics:
+    - accuracy
+    - balanced_accuracy
+    - f1_macro
+    - f1_negative
+    - roc_auc
+    - pr_auc
+    - confusion_matrix
+  primary_metric: f1_macro
+  save_predictions: true
+
+run:
+  name: base                     # override per config
+  output_root: models
+  checkpoints_subdir: checkpoints
+  predictions_subdir: predictions

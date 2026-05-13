@@ -1,0 +1,27 @@
+defaults: configs/base.yaml
+
+run:
+  name: gcn
+
+model:
+  type: gcn
+  encoder:
+    layers:
+      - { type: GCNConv, out_channels: 128 }
+      - { type: GCNConv, out_channels: 64 }
+    dropout: 0.5
+    activation: relu
+    add_self_loops: true
+    normalize: true
+  decoder:
+    type: mlp_edge
+    hidden_channels: 64
+    num_layers: 2
+    dropout: 0.3
+    edge_feature_combiner: concat   # concat | hadamard | abs_diff | concat_plus_edgefeat
+
+training:
+  epochs: 200
+  lr: 0.005
+  weight_decay: 0.0005
+  early_stopping_patience: 20

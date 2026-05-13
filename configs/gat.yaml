@@ -1,0 +1,26 @@
+defaults: configs/base.yaml
+
+run:
+  name: gat
+
+model:
+  type: gat
+  encoder:
+    layers:
+      - { type: GATv2Conv, out_channels: 64, heads: 4, concat: true }
+      - { type: GATv2Conv, out_channels: 64, heads: 1, concat: false }
+    dropout: 0.5
+    attn_dropout: 0.2
+    activation: elu
+  decoder:
+    type: mlp_edge
+    hidden_channels: 64
+    num_layers: 2
+    dropout: 0.3
+    edge_feature_combiner: concat
+
+training:
+  epochs: 200
+  lr: 0.003
+  weight_decay: 0.0005
+  early_stopping_patience: 20

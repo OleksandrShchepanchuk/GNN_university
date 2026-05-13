@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "reddit-gnn"
+version = "0.1.0"
+description = "Edge sign classification on the SNAP Reddit Hyperlink Network (subreddit-to-subreddit hyperlinks)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [
+    { name = "Oleksandr Shchepanchuk", email = "education.oleksandr@gmail.com" },
+]
+keywords = ["graph-neural-networks", "snap", "reddit", "edge-classification", "signed-graphs", "pytorch-geometric"]
+
+dependencies = [
+    "torch>=2.2",
+    "torch-geometric>=2.5",
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "networkx>=3.2",
+    "matplotlib>=3.8",
+    "tqdm>=4.66",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+    "typer>=0.12",
+    "optuna>=3.6",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "pre-commit>=3.7",
+    "ipykernel>=6.29",
+    "jupyterlab>=4.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/oleksandr-shchepanchuk/reddit-hyperlink-gnn"
+Dataset = "https://snap.stanford.edu/data/soc-RedditHyperlinks.html"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reddit_gnn"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["notebooks", "data", "models", "reports"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Option(...) defaults are idiomatic; don't flag them
+"scripts/*.py" = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+pythonpath = ["src"]

@@ -1,0 +1,30 @@
+defaults: configs/base.yaml
+
+run:
+  name: graphsage
+
+model:
+  type: sage
+  encoder:
+    layers:
+      - { type: SAGEConv, out_channels: 128, aggr: mean }
+      - { type: SAGEConv, out_channels: 64, aggr: mean }
+    dropout: 0.5
+    activation: relu
+  decoder:
+    type: mlp_edge
+    hidden_channels: 64
+    num_layers: 2
+    dropout: 0.3
+    edge_feature_combiner: concat_plus_edgefeat
+
+training:
+  epochs: 200
+  lr: 0.005
+  weight_decay: 0.0005
+  early_stopping_patience: 20
+
+  # Neighbor sampling — only used when loaders/loaders.py is wired up.
+  neighbor_sampler:
+    num_neighbors: [15, 10]
+    batch_size: 4096

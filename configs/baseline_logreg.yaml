@@ -1,0 +1,18 @@
+defaults: configs/base.yaml
+
+run:
+  name: baseline_logreg
+
+model:
+  type: baseline_logreg
+  # Inputs: concatenated [src_embed, dst_embed, engineered_edge_features].
+  class_weight: balanced
+  max_iter: 2000
+  C: 1.0
+  penalty: l2
+  solver: lbfgs
+
+training:
+  # The sklearn baseline trains in one fit() call; PyTorch loops do not apply.
+  epochs: 1
+  batch_size: 0
