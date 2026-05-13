@@ -256,15 +256,24 @@ def plot_predicted_subgraph(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     *,
+    max_edges: int = 100,
     seed: int = 42,
     save_path: str | Path | None = None,
 ) -> Figure:
-    """Render a small subgraph colored by (true vs predicted) correctness.
+    """Render a sample of (up to ``max_edges``) edges with **two colors per edge**.
 
-    Edge styles:
-        * solid green   — true positive (pred & label both 1).
-        * solid red     — true negative (pred & label both 0).
-        * dashed black  — misclassified.
+    Each directed edge is drawn twice:
+        * a thick outer line in the **true-sign** color (red for negative,
+          green for positive);
+        * a thinner inner line in the **predicted-sign** color.
+
+    When the model is correct, the inner color covers the outer one and the
+    edge looks uniformly green or red. When it is wrong, the outer color
+    shows up as a halo around the inner color — disagreements jump out
+    visually even on dense subgraphs.
+
+    Default ``max_edges=100`` matches the project spec; the sampling is
+    deterministic given ``seed``.
     """
     import networkx as nx
     from matplotlib.lines import Line2D
@@ -272,83 +281,104 @@ def plot_predicted_subgraph(
     if len(df_subset) != len(y_true) or len(df_subset) != len(y_pred):
         raise ValueError("df_subset, y_true, y_pred must have equal length")
 
-    G = _build_signed_digraph(df_subset.assign(label_binary=np.asarray(y_true).astype(int)))
     y_true = np.asarray(y_true).astype(int)
     y_pred = np.asarray(y_pred).astype(int)
 
-    pos = nx.spring_layout(G, seed=seed)
+    if len(df_subset) > max_edges:
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(len(df_subset), size=max_edges, replace=False)
+        df_subset = df_subset.iloc[idx].reset_index(drop=True)
+        y_true = y_true[idx]
+        y_pred = y_pred[idx]
 
     fig, ax = plt.subplots(figsize=(8, 7))
-    if G.number_of_nodes() == 0:
+    if len(df_subset) == 0:
         ax.set_title("Predicted subgraph (empty)")
         ax.axis("off")
         return _maybe_save(fig, save_path)
 
+    G = _build_signed_digraph(df_subset.assign(label_binary=y_true))
+    pos = nx.spring_layout(G, seed=seed)
+
     nx.draw_networkx_nodes(G, pos, ax=ax, node_size=220, node_color="#cccccc", edgecolors="black")
 
-    correct_pos: list[tuple[str, str]] = []
-    correct_neg: list[tuple[str, str]] = []
-    wrong: list[tuple[str, str]] = []
-    for (u, v, _label), yt, yp in zip(
-        df_subset[["source_subreddit_norm", "target_subreddit_norm", "label_binary"]].itertuples(
-            index=False, name=None
-        ),
-        y_true,
-        y_pred,
-        strict=True,
-    ):
-        edge = (str(u), str(v))
-        if yt == yp == 1:
-            correct_pos.append(edge)
-        elif yt == yp == 0:
-            correct_neg.append(edge)
-        else:
-            wrong.append(edge)
+    src_col = "source_subreddit_norm"
+    tgt_col = "target_subreddit_norm"
+    triples = list(
+        zip(
+            df_subset[src_col].astype(str).tolist(),
+            df_subset[tgt_col].astype(str).tolist(),
+            y_true.tolist(),
+            y_pred.tolist(),
+            strict=True,
+        )
+    )
 
-    nx.draw_networkx_edges(
-        G,
-        pos,
-        edgelist=correct_pos,
-        ax=ax,
-        edge_color=POSITIVE_COLOR,
-        arrows=True,
-        width=1.0,
-        alpha=0.85,
-    )
-    nx.draw_networkx_edges(
-        G,
-        pos,
-        edgelist=correct_neg,
-        ax=ax,
-        edge_color=NEGATIVE_COLOR,
-        arrows=True,
-        width=1.0,
-        alpha=0.85,
-    )
-    nx.draw_networkx_edges(
-        G,
-        pos,
-        edgelist=wrong,
-        ax=ax,
-        edge_color="black",
-        style="dashed",
-        arrows=True,
-        width=1.2,
-        alpha=0.9,
-    )
+    def _color(label: int) -> str:
+        return POSITIVE_COLOR if label == 1 else NEGATIVE_COLOR
+
+    by_true: dict[int, list[tuple[str, str]]] = {0: [], 1: []}
+    by_pred: dict[int, list[tuple[str, str]]] = {0: [], 1: []}
+    n_correct = 0
+    for u, v, yt, yp in triples:
+        by_true[yt].append((u, v))
+        by_pred[yp].append((u, v))
+        if yt == yp:
+            n_correct += 1
+
+    # Pass 1: thick outer line — TRUE sign.
+    for label, edges in by_true.items():
+        if not edges:
+            continue
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            edgelist=edges,
+            ax=ax,
+            edge_color=_color(label),
+            arrows=True,
+            width=4.5,
+            alpha=0.95,
+            connectionstyle="arc3,rad=0.05",
+        )
+    # Pass 2: thinner inner line — PREDICTED sign.
+    for label, edges in by_pred.items():
+        if not edges:
+            continue
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            edgelist=edges,
+            ax=ax,
+            edge_color=_color(label),
+            arrows=True,
+            width=1.8,
+            alpha=1.0,
+            connectionstyle="arc3,rad=0.05",
+        )
 
     deg = dict(G.degree())
     top_nodes = sorted(deg, key=deg.get, reverse=True)[: min(20, len(deg))]
     nx.draw_networkx_labels(G, pos, labels={n: n for n in top_nodes}, ax=ax, font_size=7)
 
     handles = [
-        Line2D([0], [0], color=POSITIVE_COLOR, lw=2, label="correct positive"),
-        Line2D([0], [0], color=NEGATIVE_COLOR, lw=2, label="correct negative"),
-        Line2D([0], [0], color="black", lw=2, linestyle="dashed", label="misclassified"),
+        Line2D([0], [0], color=POSITIVE_COLOR, lw=4, label="positive (label/pred = 1)"),
+        Line2D([0], [0], color=NEGATIVE_COLOR, lw=4, label="negative (label/pred = 0)"),
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            linestyle="none",
+            markerfacecolor=POSITIVE_COLOR,
+            markeredgecolor=NEGATIVE_COLOR,
+            markeredgewidth=2.0,
+            markersize=10,
+            label="disagreement (outer halo)",
+        ),
     ]
-    ax.legend(handles=handles, loc="lower right")
+    ax.legend(handles=handles, loc="lower right", fontsize=8)
     ax.set_title(
-        f"Predicted subgraph ({len(correct_pos) + len(correct_neg)} correct, {len(wrong)} wrong)"
+        f"Predicted subgraph (n={len(triples)}; {n_correct} correct, {len(triples) - n_correct} wrong)"
     )
     ax.axis("off")
     fig.tight_layout()
