@@ -390,3 +390,44 @@ def test_save_processed_dataset_metadata_is_consistent(tmp_path: Path) -> None:
     assert metadata["num_edges"] == len(mapped)
     assert metadata["network_type"] == "both"
     assert set(metadata["label_distribution"].keys()) <= {"0", "1"}
+
+
+# ---------------------------------------------------------------------------
+# Analysis smoke test
+# ---------------------------------------------------------------------------
+
+
+def test_compute_basic_stats_smoke() -> None:
+    """compute_basic_stats returns the expected counts on a hand-built tiny df."""
+    from reddit_gnn.analysis.graph_stats import compute_basic_stats
+
+    # 4 nodes (0..3), 5 edges, one of which is a duplicate of another (in terms
+    # of (source_id, target_id)); no self-loops.
+    df = pd.DataFrame(
+        {
+            "source_id": [0, 1, 2, 0, 3],
+            "target_id": [1, 2, 3, 1, 0],  # row 3 duplicates (0->1) from row 0
+            "source_subreddit_norm": ["a", "b", "c", "a", "d"],
+            "target_subreddit_norm": ["b", "c", "d", "b", "a"],
+            "label_binary": np.array([1, 0, 1, 1, 0], dtype=np.int8),
+            "TIMESTAMP": pd.to_datetime(
+                [
+                    "2014-01-01",
+                    "2014-02-01",
+                    "2014-03-01",
+                    "2014-04-01",
+                    "2014-05-01",
+                ]
+            ),
+        }
+    )
+    stats = compute_basic_stats(df)
+    assert stats["num_nodes"] == 4
+    assert stats["num_edges"] == 5
+    assert stats["self_loop_count"] == 0
+    assert stats["duplicate_edge_count"] == 1
+    # Average degree = total edges / num nodes = 5/4 = 1.25 for both directions.
+    assert stats["avg_in_degree"] == pytest.approx(1.25)
+    assert stats["avg_out_degree"] == pytest.approx(1.25)
+    # Node 1 receives edges from 0 (twice) and 2 -> max in-degree 2.
+    assert stats["max_in_degree"] == 2
