@@ -537,11 +537,6 @@ def main(
                 fb.transform_edge_features(df.head(1)).shape[1]
                 * (5 if cfg["model"].get("use_node_features", True) else 1)
             )
-        elif model_type == "signed_gcn":
-            raise NotImplementedError(
-                "signed_gcn end-to-end is not yet wired into scripts/run_experiment.py. "
-                "Use one of: baseline_logreg, baseline_mlp, gcn, sage, gat."
-            )
         else:
             metrics_per_split, n_params = _run_torch_path(
                 cfg=cfg,
@@ -615,6 +610,27 @@ def _run_torch_path(
         num_neighbors=sampler_cfg.get("num_neighbors", [15, 10]),
         batch_size=int(sampler_cfg.get("batch_size", cfg["training"].get("batch_size", 2048))),
     )
+
+    # Wire SignedGCN: split each split's MP graph into (pos, neg) half-graphs
+    # by the labels of the MP edges and cache them on the loader's Data so
+    # training.loops._forward can call model.forward_signed(...) without
+    # touching df during the inner loop. For all other encoders this is a no-op.
+    from reddit_gnn.models.encoders import SignedGCNEncoder
+    from reddit_gnn.training.loops import split_mp_by_label
+
+    if isinstance(getattr(model, "encoder", None), SignedGCNEncoder):
+        for split_name, loader in loaders.items():
+            mp_idx = splits[split_name]["mp_idx"]
+            pos_ei, neg_ei = split_mp_by_label(loader.data.edge_index, mp_idx, df)
+            loader.data.pos_edge_index = pos_ei
+            loader.data.neg_edge_index = neg_ei
+            log.info(
+                "signed_gcn %s: pos_mp=%d neg_mp=%d (total mp=%d)",
+                split_name,
+                pos_ei.shape[1],
+                neg_ei.shape[1],
+                loader.data.edge_index.shape[1],
+            )
 
     result = fit(
         model,

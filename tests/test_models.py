@@ -308,3 +308,118 @@ def test_public_classes_exist() -> None:
     )
     for cls in classes:
         assert isinstance(cls, type)
+
+
+# ---------------------------------------------------------------------------
+# SignedGCN end-to-end via fit()
+# ---------------------------------------------------------------------------
+
+
+def test_signed_gcn_runs_end_to_end_via_fit(tmp_path):
+    """The full training loop must accept SignedGCN and emit finite metrics.
+
+    Builds tiny synthetic processed-style data (mixed labels so both signed
+    half-graphs are non-empty), attaches pos/neg edge indices to each loader
+    the way ``scripts/run_experiment.py`` does, then calls ``fit`` for 2
+    epochs and asserts the returned ``best_val_pr_auc`` is a finite float.
+    """
+    import pandas as pd
+    from torch_geometric.data import Data as PyGData
+
+    from reddit_gnn.models.decoders import EdgeMLPDecoder
+    from reddit_gnn.models.edge_classifier import EdgeClassifier
+    from reddit_gnn.models.encoders import SignedGCNEncoder
+    from reddit_gnn.training.loaders import FullBatchLoader
+    from reddit_gnn.training.loops import fit, split_mp_by_label
+
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    n_nodes = 12
+    n_train_mp, n_train_sup = 24, 8
+    n_val, n_test = 10, 10
+
+    def _data_block(n_edges: int, label_mix: bool = True):
+        src = rng.integers(0, n_nodes, size=n_edges).astype(np.int64)
+        tgt = rng.integers(0, n_nodes, size=n_edges).astype(np.int64)
+        same = src == tgt
+        tgt[same] = (tgt[same] + 1) % n_nodes
+        labels = (
+            rng.integers(0, 2, size=n_edges).astype(np.int64)
+            if label_mix
+            else np.ones(n_edges, dtype=np.int64)
+        )
+        return src, tgt, labels
+
+    src_mp, tgt_mp, mp_labels = _data_block(n_train_mp)
+    src_sup, tgt_sup, sup_labels = _data_block(n_train_sup)
+    src_val, tgt_val, val_labels = _data_block(n_val)
+    src_test, tgt_test, test_labels = _data_block(n_test)
+
+    # Build a tiny df mapping MP rows to labels so split_mp_by_label finds them.
+    mp_idx_train = np.arange(n_train_mp, dtype=np.int64)
+    df = pd.DataFrame({"label_binary": mp_labels.astype(np.int8)})
+
+    F_x, F_e = 6, 4
+    x = torch.randn(n_nodes, F_x)
+    edge_features_for_sup = torch.randn(n_train_sup + n_val + n_test, F_e)
+
+    def _make_loader(mp_src, mp_tgt, sup_src, sup_tgt, sup_labels_, sup_attr_slice):
+        data = PyGData(
+            x=x,
+            edge_index=torch.from_numpy(np.stack([mp_src, mp_tgt], axis=0)).long(),
+            edge_attr=torch.zeros(len(mp_src), F_e),
+            edge_label_index=torch.from_numpy(np.stack([sup_src, sup_tgt], axis=0)).long(),
+            edge_label=torch.from_numpy(sup_labels_).long(),
+            edge_label_attr=edge_features_for_sup[sup_attr_slice],
+            edge_label_time=torch.zeros(len(sup_src), dtype=torch.int64),
+            edge_time=torch.zeros(len(mp_src), dtype=torch.int64),
+        )
+        return FullBatchLoader(data)
+
+    loaders = {
+        "train": _make_loader(src_mp, tgt_mp, src_sup, tgt_sup, sup_labels, slice(0, n_train_sup)),
+        "val": _make_loader(
+            src_mp, tgt_mp, src_val, tgt_val, val_labels, slice(n_train_sup, n_train_sup + n_val)
+        ),
+        "test": _make_loader(
+            src_mp,
+            tgt_mp,
+            src_test,
+            tgt_test,
+            test_labels,
+            slice(n_train_sup + n_val, n_train_sup + n_val + n_test),
+        ),
+    }
+
+    # Attach signed pos/neg edge_index to each loader's data — same as the
+    # production script does in scripts/run_experiment.py.
+    for loader in loaders.values():
+        pos_ei, neg_ei = split_mp_by_label(
+            loader.data.edge_index, torch.from_numpy(mp_idx_train), df
+        )
+        loader.data.pos_edge_index = pos_ei
+        loader.data.neg_edge_index = neg_ei
+
+    encoder = SignedGCNEncoder(in_channels=F_x, hidden_channels=8, num_layers=2)
+    decoder = EdgeMLPDecoder(node_dim=8, edge_feature_dim=F_e, hidden=8, dropout=0.0)
+    model = EdgeClassifier(encoder, decoder)
+
+    result = fit(
+        model,
+        loaders,
+        cfg={
+            "training": {
+                "lr": 0.01,
+                "weight_decay": 0.0,
+                "epochs": 2,
+                "early_stopping_patience": 5,
+                "grad_clip": 1.0,
+                "device": "cpu",
+            }
+        },
+        checkpoint_path=tmp_path / "signed.pt",
+        history_path=tmp_path / "signed.csv",
+    )
+    assert np.isfinite(result["best_val_pr_auc"]), "SignedGCN fit returned non-finite val_pr_auc"
+    assert result["best_epoch"] >= 1
+    assert len(result["history"]) == 2

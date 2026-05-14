@@ -55,10 +55,68 @@ def _prepare_loader_for_device(loader, device: torch.device) -> None:
         "edge_label_index",
         "edge_label",
         "edge_label_time",
+        # SignedGCN-specific cached partitions (attached by run_experiment.py
+        # before fit() when the encoder is SignedGCNEncoder).
+        "pos_edge_index",
+        "neg_edge_index",
     ):
         t = getattr(data, attr, None)
         if isinstance(t, torch.Tensor) and t.device != device:
             setattr(data, attr, t.to(device, non_blocking=True))
+
+
+def split_mp_by_label(
+    mp_edge_index: torch.Tensor,
+    mp_idx: torch.Tensor,
+    df,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Partition the MP graph into positive / negative half-graphs by label.
+
+    Used to feed :class:`~reddit_gnn.models.encoders.SignedGCNEncoder`, which
+    expects ``forward(x, pos_edge_index, neg_edge_index)``. ``mp_idx`` are the
+    row indices of the MP edges into the original processed ``df``; we look
+    up their ``label_binary`` there to decide which half-graph each column
+    belongs to.
+
+    Returns ``(pos_edge_index, neg_edge_index)`` as ``(2, M_pos)`` and
+    ``(2, M_neg)`` LongTensors. Same device as the input ``mp_edge_index``.
+    """
+    idx_np = mp_idx.detach().cpu().numpy()
+    labels_np = df.iloc[idx_np]["label_binary"].to_numpy()
+    labels = torch.as_tensor(labels_np, dtype=torch.long, device=mp_edge_index.device)
+    pos_mask = labels == 1
+    neg_mask = labels == 0
+    return mp_edge_index[:, pos_mask], mp_edge_index[:, neg_mask]
+
+
+def _is_signed_encoder(model: nn.Module) -> bool:
+    """True iff ``model.encoder`` is a SignedGCNEncoder. Cheap and tolerant of wrappers."""
+    encoder = getattr(model, "encoder", None)
+    if encoder is None:
+        return False
+    # Import lazily to avoid a circular import via reddit_gnn.models.encoders.
+    from reddit_gnn.models.encoders import SignedGCNEncoder
+
+    return isinstance(encoder, SignedGCNEncoder)
+
+
+def _forward(model: nn.Module, loader, batch, edge_label_attr: torch.Tensor | None) -> torch.Tensor:
+    """Dispatch on encoder type so SignedGCN gets ``forward_signed`` (pos/neg)
+    and every other encoder gets the normal ``forward`` path.
+
+    For SignedGCN we read the pre-computed ``pos_edge_index`` / ``neg_edge_index``
+    that ``run_experiment.py`` attaches to each loader's ``Data`` before fit().
+    Computing them once per loader (rather than every batch) is correct under
+    the FullBatchLoader fallback we currently use; a future LinkNeighborLoader
+    path would need to re-derive the half-graphs per batch.
+    """
+    if _is_signed_encoder(model):
+        pos_ei = loader.data.pos_edge_index
+        neg_ei = loader.data.neg_edge_index
+        return model.forward_signed(
+            batch.x, pos_ei, neg_ei, batch.edge_label_index, edge_label_attr
+        )
+    return model(batch.x, batch.edge_index, batch.edge_label_index, edge_label_attr)
 
 
 def _batch_edge_label_attr(loader, batch, device: torch.device) -> torch.Tensor | None:
@@ -94,12 +152,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         edge_label_attr = _batch_edge_label_attr(loader, batch, device)
-        logits = model(
-            batch.x,
-            batch.edge_index,
-            batch.edge_label_index,
-            edge_label_attr,
-        )
+        logits = _forward(model, loader, batch, edge_label_attr)
         target = batch.edge_label.to(logits.dtype)
         loss = loss_fn(logits, target)
         loss.backward()
@@ -129,12 +182,7 @@ def evaluate(
     for batch in loader:
         batch = batch.to(device, non_blocking=True)
         edge_label_attr = _batch_edge_label_attr(loader, batch, device)
-        logits = model(
-            batch.x,
-            batch.edge_index,
-            batch.edge_label_index,
-            edge_label_attr,
-        )
+        logits = _forward(model, loader, batch, edge_label_attr)
         scores = torch.sigmoid(logits)
         y_true_chunks.append(batch.edge_label.detach().cpu().numpy())
         y_score_chunks.append(scores.detach().cpu().numpy())
