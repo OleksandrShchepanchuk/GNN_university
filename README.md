@@ -158,14 +158,14 @@ flowchart LR
 The decoder always assembles the supervision-edge representation as
 
 $$
-\mathbf{e}_{uv} = \big[\ \mathbf{z}_u\ \|\ \mathbf{z}_v\ \|\ |\mathbf{z}_u - \mathbf{z}_v|\ \|\ \mathbf{z}_u \odot \mathbf{z}_v\ \|\ \mathbf{a}_{uv}\ \big]
+\mathbf{e}_{uv} = \big[\, \mathbf{z}_u \,\Vert\, \mathbf{z}_v \,\Vert\, \lvert \mathbf{z}_u - \mathbf{z}_v \rvert \,\Vert\, \mathbf{z}_u \odot \mathbf{z}_v \,\Vert\, \mathbf{a}_{uv} \,\big]
 $$
 
 $$
 \hat{y}_{uv} = \sigma\!\big(\mathrm{MLP}(\mathbf{e}_{uv})\big)
 $$
 
-Each of the four interaction terms contributes a different signal: $\mathbf{z}_u$ and $\mathbf{z}_v$ carry the endpoint identities individually, $|\mathbf{z}_u - \mathbf{z}_v|$ is symmetric and captures community-distance, $\mathbf{z}_u \odot \mathbf{z}_v$ is the Hadamard product (element-wise interaction strength), and the concatenated $\mathbf{a}_{uv}$ injects per-edge text and temporal features (engineered + scaled by `FeatureBuilder`). Together they let the decoder learn pair-asymmetric, pair-symmetric, and edge-attributed signals without needing a custom kernel.
+Each of the four interaction terms contributes a different signal: $\mathbf{z}_u$ and $\mathbf{z}_v$ carry the endpoint identities individually, $\lvert \mathbf{z}_u - \mathbf{z}_v \rvert$ is symmetric and captures community-distance, $\mathbf{z}_u \odot \mathbf{z}_v$ is the Hadamard product (element-wise interaction strength), and the concatenated $\mathbf{a}_{uv}$ injects per-edge text and temporal features (engineered + scaled by `FeatureBuilder`). Together they let the decoder learn pair-asymmetric, pair-symmetric, and edge-attributed signals without needing a custom kernel.
 
 ### Encoder architectures
 
@@ -181,31 +181,33 @@ $$
 **GraphSAGE** ([Hamilton et al., 2017](https://arxiv.org/abs/1706.02216)) — concatenate-and-project with a permutation-invariant neighbor aggregator (we use `mean`):
 
 $$
-\mathbf{h}_v^{(\ell+1)} = \sigma\!\Big(\mathbf{W}^{(\ell)} \cdot \big[\ \mathbf{h}_v^{(\ell)}\ \|\ \mathrm{AGG}_{\,\mathrm{mean}}\!\big(\{\mathbf{h}_u^{(\ell)} : u \in \mathcal{N}(v)\}\big)\ \big]\Big)
+\mathbf{h}_v^{(\ell+1)} = \sigma\!\Big(\mathbf{W}^{(\ell)} \cdot \big[\, \mathbf{h}_v^{(\ell)} \,\Vert\, \mathrm{AGG}_{\mathrm{mean}}\big(\{\mathbf{h}_u^{(\ell)} : u \in \mathcal{N}(v)\}\big) \,\big]\Big)
 $$
 
 **GAT** ([Veličković et al., 2018](https://arxiv.org/abs/1710.10903)) — attention-weighted aggregation with two heads concatenated (per-head output width $F_z / H$):
 
 $$
-\alpha_{vu} = \frac{\exp\!\big(\mathrm{LeakyReLU}(\mathbf{a}^{\top}[\mathbf{W}\mathbf{h}_v\,\|\,\mathbf{W}\mathbf{h}_u])\big)}{\sum_{k \in \mathcal{N}(v) \cup \{v\}} \exp\!\big(\mathrm{LeakyReLU}(\mathbf{a}^{\top}[\mathbf{W}\mathbf{h}_v\,\|\,\mathbf{W}\mathbf{h}_k])\big)}
+\alpha_{vu} = \frac{\exp\!\big(\mathrm{LeakyReLU}(\mathbf{a}^{\top}[\mathbf{W}\mathbf{h}_v \,\Vert\, \mathbf{W}\mathbf{h}_u])\big)}{\sum_{k \in \mathcal{N}(v) \cup \{v\}} \exp\!\big(\mathrm{LeakyReLU}(\mathbf{a}^{\top}[\mathbf{W}\mathbf{h}_v \,\Vert\, \mathbf{W}\mathbf{h}_k])\big)}
 $$
 
 $$
-\mathbf{h}_v^{(\ell+1)} = \Big\|_{h=1}^{H}\,\sigma\!\Big(\sum_{u \in \mathcal{N}(v) \cup \{v\}} \alpha_{vu}^{(h)}\,\mathbf{W}^{(h)}\,\mathbf{h}_u^{(\ell)}\Big)
+\mathbf{h}_v^{(\ell+1)} = \mathop{\big\Vert}_{h=1}^{H}\, \sigma\!\Big(\sum_{u \in \mathcal{N}(v) \cup \{v\}} \alpha_{vu}^{(h)}\, \mathbf{W}^{(h)}\, \mathbf{h}_u^{(\ell)}\Big)
 $$
+
+where $\mathop{\big\Vert}_{h=1}^{H}$ is the concatenation of the $H$ attention-head outputs along the feature dimension.
 
 **SignedGCN** ([Derr et al., 2018](https://arxiv.org/abs/1808.06354)) — message-passing partitioned by edge sign into positive and negative half-graphs $\mathbf{A}^{+}_{mp},\ \mathbf{A}^{-}_{mp}$, with separate "balanced" and "unbalanced" embedding tracks updated under balance theory:
 
 $$
-\mathbf{H}^{B,(\ell+1)} = \sigma\!\Big(\mathbf{W}^{B}\!\big[\,\mathrm{AGG}(\mathbf{A}^{+}_{mp},\mathbf{H}^{B,(\ell)})\ \|\ \mathrm{AGG}(\mathbf{A}^{-}_{mp},\mathbf{H}^{U,(\ell)})\,\big]\Big)
+\mathbf{H}^{B,(\ell+1)} = \sigma\!\Big(\mathbf{W}^{B} \big[\, \mathrm{AGG}(\mathbf{A}^{+}_{mp}, \mathbf{H}^{B,(\ell)}) \,\Vert\, \mathrm{AGG}(\mathbf{A}^{-}_{mp}, \mathbf{H}^{U,(\ell)}) \,\big]\Big)
 $$
 
 $$
-\mathbf{H}^{U,(\ell+1)} = \sigma\!\Big(\mathbf{W}^{U}\!\big[\,\mathrm{AGG}(\mathbf{A}^{+}_{mp},\mathbf{H}^{U,(\ell)})\ \|\ \mathrm{AGG}(\mathbf{A}^{-}_{mp},\mathbf{H}^{B,(\ell)})\,\big]\Big)
+\mathbf{H}^{U,(\ell+1)} = \sigma\!\Big(\mathbf{W}^{U} \big[\, \mathrm{AGG}(\mathbf{A}^{+}_{mp}, \mathbf{H}^{U,(\ell)}) \,\Vert\, \mathrm{AGG}(\mathbf{A}^{-}_{mp}, \mathbf{H}^{B,(\ell)}) \,\big]\Big)
 $$
 
 $$
-\mathbf{Z} = [\mathbf{H}^{B,(L)}\ \|\ \mathbf{H}^{U,(L)}]
+\mathbf{Z} = \big[\, \mathbf{H}^{B,(L)} \,\Vert\, \mathbf{H}^{U,(L)} \,\big]
 $$
 
 #### Common encoder configuration
@@ -240,7 +242,7 @@ $$
 | 6 | **PR-AUC on the negative class — and its lift over the class prior — as the headline metric**; the full panel includes ROC-AUC, F1-macro, F1-positive, balanced accuracy, MCC, precision/recall per class, precision-at-K (50 / 100 / 500), and the full confusion matrix | Accuracy, ROC-AUC, macro-F1 alone | With ≈ 90/10 imbalance, accuracy is dominated by the majority class and a fixed-baseline number like 0.50 PR-AUC means very different things on a 50/50 task vs a 9.4 %-prior task. Reporting the **lift** ($\mathrm{PR\text{-}AUC}_0 / \pi_0$) puts the result on a directly comparable scale. The full panel is produced by `reddit_gnn.training.metrics.classification_metrics` and unit-tested in `tests/test_metrics.py`. |
 | 7 | Multi-seed retrain (three seeds: 0 / 1 / 2) for the final comparison; `data.partition_seed` frozen at 42 across all seeds | Single-seed reporting; seeding the partition off `training.seed` | GNN training is noisy on imbalanced data; reporting `mean ± std` across seeds shows the variance directly. Freezing the partition seed (decision **3**) means the reported std isolates initialization noise. |
 | 8 | SNAP 300-d subreddit embeddings as initial node features | Random initialization | Pre-trained co-posting embeddings encode community structure the GNN would otherwise have to relearn from scratch. Subreddits absent from the SNAP file get zeros + a binary `unknown_flag` (see `data.features.load_snap_subreddit_embeddings`). |
-| 9 | `EdgeMLPDecoder` with $[\mathbf{z}_u, \mathbf{z}_v, |\mathbf{z}_u - \mathbf{z}_v|, \mathbf{z}_u \odot \mathbf{z}_v, \mathbf{a}_{uv}]$ | Pure dot-product decoder, concat-only decoder | The Hadamard product captures element-wise interactions, $|\mathbf{z}_u - \mathbf{z}_v|$ captures asymmetry; both lift signal when sign depends on subreddit pair semantics rather than identity alone. |
+| 9 | `EdgeMLPDecoder` with $[\mathbf{z}_u, \mathbf{z}_v, \lvert \mathbf{z}_u - \mathbf{z}_v \rvert, \mathbf{z}_u \odot \mathbf{z}_v, \mathbf{a}_{uv}]$ | Pure dot-product decoder, concat-only decoder | The Hadamard product captures element-wise interactions, $\lvert \mathbf{z}_u - \mathbf{z}_v \rvert$ captures asymmetry; both lift signal when sign depends on subreddit pair semantics rather than identity alone. |
 | 10 | `FullBatchLoader` fallback when `pyg-lib` / `torch-sparse` wheels are unavailable | Skip neighbor sampling entirely, or pin torch to an older version | No `pyg-lib` wheel exists for torch 2.12 (PyG ships wheels up to torch 2.9.1); pinning would force an environment downgrade. `FullBatchLoader` yields the entire fold once per epoch with the same `batch` interface, so the training loop is unchanged. The split-level temporal invariant still holds; only the *per-batch* `temporal_strategy="last"` neighbor filter is lost. |
 | 11 | MLflow tracking with local file store | No tracking; CSV-only logging | One UI, one place to compare runs, automatic system metrics. The tracking module is dependency-injected (`reddit_gnn.tracking.*`) so disabling MLflow does not touch training code. |
 | 12 | Manual six-run GCN grid (LR × hidden) instead of Optuna | Optuna TPE sweep | A targeted grid over `lr ∈ {1e-3, 5e-3, 1e-2}` and `hidden_channels ∈ {64, 128, 256}` was sufficient to identify a stable configuration on GCN within the project's time budget; results in `reports/tables/metrics_gcn-lr*.json` + `metrics_gcn-h*.json`. The Optuna sweep entry point exists as a stub for a follow-up. |
