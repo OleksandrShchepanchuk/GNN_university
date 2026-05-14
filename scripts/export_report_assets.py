@@ -54,6 +54,8 @@ from reddit_gnn.training.metrics import classification_metrics
 from reddit_gnn.utils.logging import get_logger
 from reddit_gnn.visualization.results import (
     plot_confusion_matrix,
+    plot_cross_metric_comparison,
+    plot_cross_model_confusion_grid,
     plot_error_by_degree_bin,
     plot_model_comparison,
     plot_pr_roc,
@@ -68,16 +70,34 @@ console = Console()
 COMPARISON_COLUMNS = [
     "model",
     "hp_summary",
-    "train_f1",
-    "val_f1",
-    "test_f1",
-    "test_pr_auc_neg",
-    "test_roc_auc",
-    "test_balanced_acc",
-    "test_mcc",
+    "n_seeds",
     "n_params",
-    "mean_seed",
-    "std_seed",
+    "test_pr_auc_neg",
+    "test_pr_auc_neg_std",
+    "test_pr_auc_lift",
+    "test_pr_auc_lift_std",
+    "test_roc_auc",
+    "test_roc_auc_std",
+    "test_balanced_accuracy",
+    "test_balanced_accuracy_std",
+    "test_mcc",
+    "test_mcc_std",
+    "test_f1_macro",
+    "test_f1_macro_std",
+    "test_f1_negative_class",
+    "test_f1_negative_class_std",
+    "test_precision_negative",
+    "test_precision_negative_std",
+    "test_recall_negative",
+    "test_recall_negative_std",
+    "test_accuracy",
+    "test_accuracy_std",
+    # Validation side
+    "val_pr_auc_neg",
+    "val_pr_auc_neg_std",
+    "val_f1_macro",
+    "val_f1_macro_std",
+    "class_prior_negative",
 ]
 
 
@@ -252,14 +272,16 @@ def _read_config(path: Path) -> dict[str, Any] | None:
 
 
 def _build_comparison(runs: list[dict[str, Any]]) -> pd.DataFrame:
-    """Aggregate per-run records into one row per model.
+    """Aggregate per-run records into one row per model_type.
 
-    Point estimates (``train_f1``, ``test_pr_auc_neg``, …) are averaged across
-    **every** run of the model_type so the table includes information from
-    tuning sweeps too. ``mean_seed`` / ``std_seed`` are computed from the
-    subset of runs whose ``run_name`` ends in ``-seed<int>`` — these are the
-    multi-seed retrain runs that share a single fixed configuration. When no
-    seed-tagged runs exist for a model_type, we fall back to all of its runs.
+    ONLY the multi-seed retrain runs (``<model_type>-seed{0,1,2}``) feed the
+    mean ± std columns. Single-shot runs (defaults, smoke tests, hp tuning
+    grid) are ignored. This keeps the headline comparison clean: every row
+    represents the same fixed configuration trained with 3 different model
+    init seeds against the *same* (frozen) MP partition.
+
+    Models with fewer than 1 seed-tagged run are omitted entirely — the
+    table cannot honestly report mean ± std otherwise.
     """
     if not runs:
         return pd.DataFrame(columns=COMPARISON_COLUMNS)
@@ -270,46 +292,78 @@ def _build_comparison(runs: list[dict[str, Any]]) -> pd.DataFrame:
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in runs:
-        grouped[r["model_type"]].append(r)
+        if seed_pattern.search(r["run_name"]):
+            grouped[r["model_type"]].append(r)
+
+    def _seed_arr(group, split_name: str, key: str) -> np.ndarray:
+        return np.array(
+            [g["metrics"].get(split_name, {}).get(key, np.nan) for g in group],
+            dtype=float,
+        )
+
+    def _mean(a: np.ndarray) -> float:
+        return float(np.nanmean(a)) if a.size else float("nan")
+
+    def _std(a: np.ndarray) -> float:
+        return float(np.nanstd(a, ddof=0)) if a.size > 1 else 0.0
 
     rows: list[dict[str, Any]] = []
     for model_type, group in grouped.items():
-        seed_only = [r for r in group if seed_pattern.search(r["run_name"])]
-        seed_group = seed_only if seed_only else group
-        seed_pr_auc = [g["metrics"].get("test", {}).get("pr_auc", np.nan) for g in seed_group]
-        # Extract per-seed point estimates of every column.
-        train_f1s = [g["metrics"].get("train", {}).get("f1_macro", np.nan) for g in group]
-        val_f1s = [g["metrics"].get("val", {}).get("f1_macro", np.nan) for g in group]
-        test_f1s = [g["metrics"].get("test", {}).get("f1_macro", np.nan) for g in group]
-        test_pr_auc = [g["metrics"].get("test", {}).get("pr_auc", np.nan) for g in group]
-        test_roc_auc = [g["metrics"].get("test", {}).get("roc_auc", np.nan) for g in group]
-        test_bacc = [g["metrics"].get("test", {}).get("balanced_accuracy", np.nan) for g in group]
-        test_mcc = [g["metrics"].get("test", {}).get("mcc", np.nan) for g in group]
-        n_params = [int(g.get("n_params", 0)) for g in group]
+        if not group:
+            continue
+        # Per-seed arrays.
+        test_pr_auc = _seed_arr(group, "test", "pr_auc")
+        test_pr_auc_lift = _seed_arr(group, "test", "pr_auc_lift")
+        test_roc = _seed_arr(group, "test", "roc_auc")
+        test_bacc = _seed_arr(group, "test", "balanced_accuracy")
+        test_mcc = _seed_arr(group, "test", "mcc")
+        test_f1 = _seed_arr(group, "test", "f1_macro")
+        test_f1_neg = _seed_arr(group, "test", "f1_negative_class")
+        test_prec_neg = _seed_arr(group, "test", "precision_negative")
+        test_rec_neg = _seed_arr(group, "test", "recall_negative")
+        test_acc = _seed_arr(group, "test", "accuracy")
+        val_pr_auc = _seed_arr(group, "val", "pr_auc")
+        val_f1 = _seed_arr(group, "val", "f1_macro")
+        class_prior = _seed_arr(group, "test", "class_prior_negative")
+        n_params_arr = np.array([int(g.get("n_params", 0)) for g in group])
         configs = [_read_config(g["config_path"]) for g in group]
 
         rows.append(
             {
                 "model": model_type,
                 "hp_summary": _hp_summary(configs[0]) if configs else "",
-                "train_f1": float(np.nanmean(train_f1s)),
-                "val_f1": float(np.nanmean(val_f1s)),
-                "test_f1": float(np.nanmean(test_f1s)),
-                "test_pr_auc_neg": float(np.nanmean(test_pr_auc)),
-                "test_roc_auc": float(np.nanmean(test_roc_auc)),
-                "test_balanced_acc": float(np.nanmean(test_bacc)),
-                "test_mcc": float(np.nanmean(test_mcc)),
-                "n_params": int(np.nanmean(n_params)),
-                "mean_seed": float(np.nanmean(seed_pr_auc)),
-                "std_seed": (
-                    float(np.nanstd(seed_pr_auc, ddof=0)) if len(seed_pr_auc) > 1 else 0.0
-                ),
+                "n_seeds": len(group),
+                "n_params": int(np.nanmean(n_params_arr)),
+                "test_pr_auc_neg": _mean(test_pr_auc),
+                "test_pr_auc_neg_std": _std(test_pr_auc),
+                "test_pr_auc_lift": _mean(test_pr_auc_lift),
+                "test_pr_auc_lift_std": _std(test_pr_auc_lift),
+                "test_roc_auc": _mean(test_roc),
+                "test_roc_auc_std": _std(test_roc),
+                "test_balanced_accuracy": _mean(test_bacc),
+                "test_balanced_accuracy_std": _std(test_bacc),
+                "test_mcc": _mean(test_mcc),
+                "test_mcc_std": _std(test_mcc),
+                "test_f1_macro": _mean(test_f1),
+                "test_f1_macro_std": _std(test_f1),
+                "test_f1_negative_class": _mean(test_f1_neg),
+                "test_f1_negative_class_std": _std(test_f1_neg),
+                "test_precision_negative": _mean(test_prec_neg),
+                "test_precision_negative_std": _std(test_prec_neg),
+                "test_recall_negative": _mean(test_rec_neg),
+                "test_recall_negative_std": _std(test_rec_neg),
+                "test_accuracy": _mean(test_acc),
+                "test_accuracy_std": _std(test_acc),
+                "val_pr_auc_neg": _mean(val_pr_auc),
+                "val_pr_auc_neg_std": _std(val_pr_auc),
+                "val_f1_macro": _mean(val_f1),
+                "val_f1_macro_std": _std(val_f1),
+                "class_prior_negative": _mean(class_prior),
             }
         )
 
     df = pd.DataFrame(rows)
     df = df[COMPARISON_COLUMNS]
-    # Sort by primary metric, highest first.
     return df.sort_values("test_pr_auc_neg", ascending=False).reset_index(drop=True)
 
 
@@ -433,11 +487,28 @@ def main(
         )
         plt.close("all")
         plot_model_comparison(
-            comparison.rename(columns={"test_f1": "f1_macro"}),
+            comparison.rename(columns={"test_f1_macro": "f1_macro"}),
             metric="f1_macro",
             save_path=figures_dir / "model_comparison_f1_macro.png",
         )
         plt.close("all")
+
+        # 2x3 cross-metric panel with class-prior baseline and lift annotations.
+        plot_cross_metric_comparison(
+            comparison,
+            save_path=figures_dir / "cross_metric_comparison.png",
+        )
+        plt.close("all")
+
+        # 1xN confusion-matrix grid (one representative seed per model).
+        plot_cross_model_confusion_grid(
+            predictions_dir,
+            comparison,
+            seed=0,
+            save_path=figures_dir / "confusion_grid_all_models.png",
+        )
+        plt.close("all")
+
         _build_model_agreement_artifacts(runs, tables_dir, figures_dir)
 
     console.print(f"[bold green]Done.[/bold green] {len(runs)} run(s) processed.")

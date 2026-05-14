@@ -387,9 +387,190 @@ def plot_predicted_subgraph(
 
 __all__ = [
     "plot_confusion_matrix",
+    "plot_cross_metric_comparison",
+    "plot_cross_model_confusion_grid",
     "plot_error_by_degree_bin",
     "plot_model_comparison",
     "plot_pr_roc",
     "plot_predicted_subgraph",
     "plot_training_curves",
 ]
+
+
+def plot_cross_metric_comparison(
+    comparison_df: pd.DataFrame,
+    *,
+    save_path: str | Path | None = None,
+) -> Figure:
+    """2x3 grid of per-model bar charts across six metrics.
+
+    The headline subplot (PR-AUC neg) gets a dashed horizontal class-prior line
+    and lift-annotation labels above each bar; other subplots get the standard
+    bar chart with mean ± std error bars from the multi-seed columns.
+
+    ``comparison_df`` must have the columns produced by the export aggregator
+    (``test_pr_auc_neg``, ``test_pr_auc_neg_std``, ``test_pr_auc_lift``,
+    ``test_roc_auc``, ``test_balanced_accuracy``, ``test_mcc``,
+    ``test_f1_macro``, ``test_f1_negative_class``, ``class_prior_negative``).
+    """
+    panel = [
+        ("test_pr_auc_neg", "PR-AUC (negative class)", "Headline metric"),
+        ("test_roc_auc", "ROC-AUC", "Class-symmetric"),
+        ("test_balanced_accuracy", "Balanced accuracy", "(TPR + TNR) / 2"),
+        ("test_mcc", "MCC", "Matthews correlation"),
+        ("test_f1_macro", "F1 (macro)", "Averaged across classes"),
+        ("test_f1_negative_class", "F1 on negative class", "Rare class only"),
+    ]
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    axes_flat = axes.flatten()
+
+    df = comparison_df.sort_values("test_pr_auc_neg", ascending=False).reset_index(drop=True)
+    class_prior = (
+        float(df["class_prior_negative"].dropna().iloc[0])
+        if "class_prior_negative" in df.columns and not df["class_prior_negative"].dropna().empty
+        else float("nan")
+    )
+
+    for ax, (col, title, subtitle) in zip(axes_flat, panel, strict=True):
+        if col not in df.columns:
+            ax.axis("off")
+            ax.set_title(f"{title}\n(column missing)")
+            continue
+        std_col = f"{col}_std"
+        yerr = df[std_col].to_numpy() if std_col in df.columns else None
+        bars = ax.bar(
+            df["model"],
+            df[col],
+            yerr=yerr,
+            capsize=4,
+            color="#4c72b0",
+            edgecolor="black",
+            alpha=0.85,
+        )
+        ax.set_title(f"{title}\n{subtitle}", fontsize=10)
+        ax.set_ylabel(col)
+        ax.tick_params(axis="x", rotation=30)
+        for label in ax.get_xticklabels():
+            label.set_horizontalalignment("right")
+        ax.grid(axis="y", linestyle=":", alpha=0.4)
+
+        # Headline subplot: class-prior baseline + lift annotations.
+        if col == "test_pr_auc_neg":
+            if np.isfinite(class_prior):
+                ax.axhline(
+                    class_prior,
+                    color="black",
+                    linestyle="--",
+                    lw=1,
+                    alpha=0.6,
+                    label=f"class prior = {class_prior:.3f}",
+                )
+                ax.legend(loc="upper right", fontsize=8)
+            if "test_pr_auc_lift" in df.columns:
+                for bar, lift in zip(bars, df["test_pr_auc_lift"].to_numpy(), strict=True):
+                    if not np.isfinite(lift):
+                        continue
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() + (yerr[list(bars).index(bar)] if yerr is not None else 0),
+                        f"{lift:.1f}x",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                        fontweight="bold",
+                    )
+
+    fig.suptitle(
+        "Per-model test metrics (mean ± std over 3 seeds)",
+        fontsize=12,
+        y=1.00,
+    )
+    fig.tight_layout()
+    return _maybe_save(fig, save_path)
+
+
+def plot_cross_model_confusion_grid(
+    predictions_dir: Path,
+    comparison_df: pd.DataFrame,
+    *,
+    seed: int = 0,
+    save_path: str | Path | None = None,
+) -> Figure:
+    """1xN grid of test-split confusion matrices, one per model.
+
+    Reads ``predictions_dir / <model>-seed{seed}.csv`` for every model present
+    in ``comparison_df`` (in that table's sort order — typically descending
+    ``test_pr_auc_neg``), filters to the test split, builds a 2x2 confusion
+    matrix, and plots them on a shared color scale. Each subplot is titled
+    with the model name and its ``test_pr_auc_neg`` from ``comparison_df``.
+    Cells are annotated with raw count + percent.
+    """
+    models = comparison_df["model"].tolist()
+    cms: dict[str, np.ndarray] = {}
+    pr_aucs: dict[str, float] = {}
+    for m in models:
+        csv = Path(predictions_dir) / f"{m}-seed{seed}.csv"
+        if not csv.exists():
+            continue
+        df = pd.read_csv(csv)
+        sub = df[df["split"] == "test"]
+        if sub.empty:
+            continue
+        y_true = sub["y_true"].to_numpy().astype(int)
+        y_pred = sub["y_pred"].to_numpy().astype(int)
+        cm = np.array(
+            [
+                [
+                    int(((y_true == 0) & (y_pred == 0)).sum()),
+                    int(((y_true == 0) & (y_pred == 1)).sum()),
+                ],
+                [
+                    int(((y_true == 1) & (y_pred == 0)).sum()),
+                    int(((y_true == 1) & (y_pred == 1)).sum()),
+                ],
+            ]
+        )
+        cms[m] = cm
+        row = comparison_df[comparison_df["model"] == m]
+        pr_aucs[m] = float(row["test_pr_auc_neg"].iloc[0]) if not row.empty else float("nan")
+
+    n = len(cms)
+    if n == 0:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.text(0.5, 0.5, "no seed0 predictions found", ha="center", va="center")
+        ax.axis("off")
+        return _maybe_save(fig, save_path)
+
+    fig, axes = plt.subplots(1, n, figsize=(3 * n, 3.5))
+    if n == 1:
+        axes = [axes]
+    vmax = max(cm.max() for cm in cms.values())
+
+    for ax, m in zip(axes, cms.keys(), strict=True):
+        cm = cms[m]
+        total = int(cm.sum())
+        im = ax.imshow(cm, cmap="Blues", aspect="equal", vmin=0, vmax=vmax)
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+        ax.set_xticklabels(["pred 0", "pred 1"], fontsize=8)
+        ax.set_yticklabels(["true 0", "true 1"], fontsize=8)
+        ax.set_xlabel("predicted", fontsize=8)
+        if ax is axes[0]:
+            ax.set_ylabel("true", fontsize=8)
+        ax.set_title(f"{m}\nPR-AUC neg = {pr_aucs[m]:.3f}", fontsize=9)
+        for i in range(2):
+            for j in range(2):
+                val = int(cm[i, j])
+                pct = (val / total * 100.0) if total else 0.0
+                ax.text(
+                    j,
+                    i,
+                    f"{val}\n{pct:.1f}%",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="white" if val > vmax * 0.6 else "black",
+                )
+    fig.colorbar(im, ax=axes, fraction=0.035, pad=0.04)
+    fig.suptitle("Test-split confusion matrices (seed 0 of each model)", fontsize=11, y=1.02)
+    return _maybe_save(fig, save_path)
