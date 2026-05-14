@@ -59,11 +59,10 @@ models/checkpoints/*
 models/predictions/*
 !models/predictions/.gitkeep
 
-# Reports — keep structure, ignore generated assets
-reports/figures/*
-!reports/figures/.gitkeep
-reports/tables/*
-!reports/tables/.gitkeep
+# Reports — figures and tables are tracked so the README renders on GitHub
+# without requiring the reader to re-run the pipeline.
+!reports/figures/
+!reports/tables/
 
 # Logs
 *.log

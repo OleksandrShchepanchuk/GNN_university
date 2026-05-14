@@ -1,0 +1,98 @@
+{
+  "task": {
+    "name": "edge_sign_classification",
+    "label_mapping": {
+      "-1": 0,
+      "1": 1
+    },
+    "num_classes": 2
+  },
+  "data": {
+    "source": "snap_reddit_hyperlinks",
+    "body_file": "soc-redditHyperlinks-body.tsv",
+    "title_file": "soc-redditHyperlinks-title.tsv",
+    "embeddings_file": "web-redditEmbeddings-subreddits.csv",
+    "raw_dir": "data/raw",
+    "interim_dir": "data/interim",
+    "processed_dir": "data/processed",
+    "drop_missing_embeddings": false,
+    "combine_body_title": true,
+    "aggregation": "per_event"
+  },
+  "split": {
+    "strategy": "temporal",
+    "train_frac": 0.7,
+    "val_frac": 0.15,
+    "test_frac": 0.15,
+    "seed": 42
+  },
+  "features": {
+    "use_liwc_embeddings": true,
+    "embedding_dim": 300,
+    "engineered_edge_features": [
+      "raw_post_properties",
+      "is_title",
+      "year_norm",
+      "month_sin",
+      "month_cos",
+      "dayofweek_sin",
+      "dayofweek_cos",
+      "days_since_min_norm"
+    ],
+    "standardize": true
+  },
+  "training": {
+    "device": "cuda",
+    "epochs": 200,
+    "batch_size": 4096,
+    "early_stopping_patience": 20,
+    "lr": 0.001,
+    "weight_decay": 0.0005,
+    "optimizer": "adam",
+    "scheduler": "none",
+    "grad_clip": 1.0,
+    "seed": 42,
+    "log_every_n_epochs": 1
+  },
+  "evaluation": {
+    "metrics": [
+      "accuracy",
+      "balanced_accuracy",
+      "f1_macro",
+      "f1_negative",
+      "roc_auc",
+      "pr_auc",
+      "confusion_matrix"
+    ],
+    "primary_metric": "pr_auc_neg",
+    "save_predictions": true
+  },
+  "run": {
+    "name": "gcn-lr0.001",
+    "output_root": "models",
+    "checkpoints_subdir": "checkpoints",
+    "predictions_subdir": "predictions"
+  },
+  "tracking": {
+    "enabled": true,
+    "tracking_uri": null,
+    "experiment_name": "reddit_signed",
+    "run_name_template": "{model_type}-{timestamp}"
+  },
+  "model": {
+    "type": "gcn",
+    "encoder": {
+      "in_channels": null,
+      "hidden_channels": 128,
+      "out_channels": 64,
+      "num_layers": 2,
+      "dropout": 0.5,
+      "use_batchnorm": true
+    },
+    "decoder": {
+      "type": "edge_mlp",
+      "hidden": 64,
+      "dropout": 0.3
+    }
+  }
+}

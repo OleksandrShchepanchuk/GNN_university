@@ -1,0 +1,2 @@
+num_nodes,num_edges,density,avg_in_degree,avg_out_degree,max_in_degree,max_out_degree,self_loop_count,duplicate_edge_count,num_positive,num_negative,positive_ratio,negative_ratio,reciprocity,wcc_count,largest_wcc_size,scc_count,largest_scc_size,triads_balanced,triads_unbalanced,time_min,time_max
+67180,844377,0.00018709529265215161,12.568874665078893,12.568874665078893,25685,27636,0,504734,763266,81111,0.9039398278257224,0.0960601721742776,0.1765147522545732,712,65648,45564,21432,32837,9656,2013-12-31T16:20:20,2017-04-30T16:58:21
