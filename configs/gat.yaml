@@ -10,10 +10,10 @@ model:
     hidden_channels: 128         # total post-concat width per layer
     out_channels: 64
     num_layers: 2
-    heads: 4
+    heads: 2                     # was 4; cuts initial-logit magnitude in half
     concat: true                 # also accepts a list[bool] of length num_layers
     dropout: 0.5
-    attn_dropout: 0.2
+    attn_dropout: 0.2            # confirmed wired in encoders.GATEncoder
     use_batchnorm: false
   decoder:
     type: edge_mlp
@@ -22,6 +22,11 @@ model:
 
 training:
   epochs: 200
-  lr: 0.003
+  lr: 0.0005                     # was 0.003; previous LR + 4-head attention
+                                 # produced train_loss ≈ 2231 at epoch 1 and
+                                 # then a degenerate "predict-majority" optimum
+                                 # GAT couldn't escape — reducing to 5e-4
+                                 # keeps the first step from over-correcting.
   weight_decay: 0.0005
-  early_stopping_patience: 20
+  early_stopping_patience: 40    # was 20; doubles the budget for escaping
+                                 # the first-epoch degenerate optimum.

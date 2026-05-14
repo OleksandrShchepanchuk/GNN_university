@@ -26,6 +26,11 @@ data:
   # Aggregation: keep each hyperlink event as a separate example, OR aggregate
   # repeated (src,dst) pairs into one edge with majority label.
   aggregation: per_event   # one of: per_event | per_pair_majority
+  # Frozen seed for the train_mp / train_sup random partition inside
+  # build_message_passing_split. MUST be independent of training.seed:
+  # the multi-seed retrain only varies model init / dropout, not the
+  # structure of the MP graph each fold sees.
+  partition_seed: 42
 
 split:
   strategy: temporal       # one of: temporal | random_stratified

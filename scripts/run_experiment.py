@@ -478,8 +478,19 @@ def main(
     log.info("Loaded %d edges, %d nodes", len(df), num_nodes)
 
     # ---- Splits + features (train-only fit)
+    # NOTE: partition_seed is intentionally decoupled from training.seed. The
+    # MP/sup random partition is part of the *data*, not part of the model, so
+    # multi-seed retrains must see the same graph; otherwise different seeds
+    # also sample different splits and the resulting variance conflates
+    # init-noise with graph-structure-noise. See decision #7 in the README.
+    partition_seed = int(cfg.get("data", {}).get("partition_seed", 42))
     split = chronological_edge_split(df)
-    splits = build_message_passing_split(df, split, seed=seed)
+    splits = build_message_passing_split(df, split, seed=partition_seed)
+    log.info(
+        "splits: partition_seed=%d  training.seed=%d (decoupled)",
+        partition_seed,
+        seed,
+    )
     train_df = df.iloc[split.train_idx]
     raw_dir = PATHS.data_raw
     embeddings_path = raw_dir / "web-redditEmbeddings-subreddits.csv"

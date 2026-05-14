@@ -175,3 +175,48 @@ def test_stratified_random_split_preserves_class_balance() -> None:
     for idx in (sp.train_idx, sp.val_idx, sp.test_idx):
         share = (df["label_binary"].iloc[idx] == 1).mean()
         assert abs(share - global_pos) < 0.05
+
+
+def test_partition_seed_is_independent_of_training_seed() -> None:
+    """The MP/sup partition must depend only on ``partition_seed`` — not on the
+    model's ``training.seed``. Otherwise a multi-seed retrain ends up training
+    on structurally different graphs and conflates init-noise with split-noise.
+
+    Concretely: the public partition entrypoint is
+    :func:`reddit_gnn.data.splits.build_message_passing_split`, whose ``seed``
+    argument is what ``scripts/run_experiment.py`` now wires to
+    ``cfg["data"]["partition_seed"]``. The training-side seed (model init,
+    dropout) is the global seed set by :func:`reddit_gnn.seed.set_global_seed`.
+    Calling the partition with a fixed ``seed`` must always emit the same
+    ``mp_idx`` / ``sup_idx`` tensors, regardless of what the global RNG state
+    looks like at call time.
+    """
+    import torch
+
+    from reddit_gnn.seed import set_global_seed
+
+    df = _synthetic_df(n=500)
+    sp = chronological_edge_split(df)
+
+    # Same partition_seed under two wildly different training seeds (set as
+    # the *global* RNG state to mimic what the script does).
+    set_global_seed(0)
+    splits_a = build_message_passing_split(df, sp, disjoint_train_ratio=0.2, seed=42)
+    set_global_seed(2026)
+    splits_b = build_message_passing_split(df, sp, disjoint_train_ratio=0.2, seed=42)
+
+    for split_name in ("train", "val", "test"):
+        for key in ("mp_idx", "sup_idx", "mp_edge_index", "sup_edge_index"):
+            a = splits_a[split_name][key]
+            b = splits_b[split_name][key]
+            assert torch.equal(a, b), (
+                f"{split_name}.{key} differs even though partition_seed is fixed: "
+                f"the partition leaked the global RNG state"
+            )
+
+    # Cross-check: changing the partition_seed *does* produce a different
+    # train partition (otherwise the test would pass trivially).
+    splits_c = build_message_passing_split(df, sp, disjoint_train_ratio=0.2, seed=1234)
+    assert not torch.equal(splits_a["train"]["sup_idx"], splits_c["train"]["sup_idx"]), (
+        "different partition_seed values should produce different train_sup_idx"
+    )
