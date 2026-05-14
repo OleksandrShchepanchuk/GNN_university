@@ -252,9 +252,21 @@ def _read_config(path: Path) -> dict[str, Any] | None:
 
 
 def _build_comparison(runs: list[dict[str, Any]]) -> pd.DataFrame:
-    """Aggregate per-run records into one row per model (averaging over seeds)."""
+    """Aggregate per-run records into one row per model.
+
+    Point estimates (``train_f1``, ``test_pr_auc_neg``, …) are averaged across
+    **every** run of the model_type so the table includes information from
+    tuning sweeps too. ``mean_seed`` / ``std_seed`` are computed from the
+    subset of runs whose ``run_name`` ends in ``-seed<int>`` — these are the
+    multi-seed retrain runs that share a single fixed configuration. When no
+    seed-tagged runs exist for a model_type, we fall back to all of its runs.
+    """
     if not runs:
         return pd.DataFrame(columns=COMPARISON_COLUMNS)
+
+    import re as _re
+
+    seed_pattern = _re.compile(r"-seed\d+$")
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in runs:
@@ -262,6 +274,9 @@ def _build_comparison(runs: list[dict[str, Any]]) -> pd.DataFrame:
 
     rows: list[dict[str, Any]] = []
     for model_type, group in grouped.items():
+        seed_only = [r for r in group if seed_pattern.search(r["run_name"])]
+        seed_group = seed_only if seed_only else group
+        seed_pr_auc = [g["metrics"].get("test", {}).get("pr_auc", np.nan) for g in seed_group]
         # Extract per-seed point estimates of every column.
         train_f1s = [g["metrics"].get("train", {}).get("f1_macro", np.nan) for g in group]
         val_f1s = [g["metrics"].get("val", {}).get("f1_macro", np.nan) for g in group]
@@ -285,8 +300,10 @@ def _build_comparison(runs: list[dict[str, Any]]) -> pd.DataFrame:
                 "test_balanced_acc": float(np.nanmean(test_bacc)),
                 "test_mcc": float(np.nanmean(test_mcc)),
                 "n_params": int(np.nanmean(n_params)),
-                "mean_seed": float(np.nanmean(test_pr_auc)),
-                "std_seed": float(np.nanstd(test_pr_auc, ddof=0)) if len(test_pr_auc) > 1 else 0.0,
+                "mean_seed": float(np.nanmean(seed_pr_auc)),
+                "std_seed": (
+                    float(np.nanstd(seed_pr_auc, ddof=0)) if len(seed_pr_auc) > 1 else 0.0
+                ),
             }
         )
 
