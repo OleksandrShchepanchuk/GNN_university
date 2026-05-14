@@ -1,0 +1,37 @@
+defaults: configs/base.yaml
+
+run:
+  name: gat_v1
+
+# GATv1 (original Velickovic et al. 2018) reference experiment.
+# Same encoder hyperparameters as configs/gat.yaml (which uses GATv2Conv)
+# so the only varying axis between the two leaderboard entries is the
+# attention mechanism itself: GATv1 has STATIC attention (the ranking of
+# keys is the same regardless of query); GATv2 has DYNAMIC attention.
+# Brody, Alon & Yahav (2022, "How Attentive are Graph Attention Networks?",
+# https://arxiv.org/abs/2105.14491) argue GATv2 strictly dominates GATv1
+# on benchmarks dominated by query-dependent neighbor importance. This
+# run tests their claim on the SNAP Reddit edge-sign task.
+model:
+  type: gat_v1
+  encoder:
+    in_channels: null
+    hidden_channels: 128
+    out_channels: 64
+    num_layers: 2
+    heads: 1                     # match gat.yaml; single head removes a variance source
+    concat: false
+    dropout: 0.5
+    attn_dropout: 0.0
+    use_batchnorm: true          # match gat.yaml — keeps layer-2 activations from drifting
+  decoder:
+    type: edge_mlp
+    hidden: 64
+    dropout: 0.3
+
+training:
+  epochs: 200
+  lr: 0.0005
+  weight_decay: 0.0005
+  early_stopping_patience: 40
+  warmup_epochs: 10              # match gat.yaml — same first-step protection

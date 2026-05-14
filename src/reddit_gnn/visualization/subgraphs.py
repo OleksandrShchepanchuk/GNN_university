@@ -28,63 +28,147 @@ def _draw_signed_digraph(
     *,
     title: str,
     seed: int = 42,
-    node_size: int = 220,
 ) -> Figure:
-    fig, ax = plt.subplots(figsize=(8, 7))
+    """Render a signed multidigraph with:
+
+    * **Node size** proportional to degree (popular subreddits look big).
+    * **Node color** by the share of outgoing edges with `label = 0` —
+      continuous red → grey → green gradient via the `RdYlGn_r` colormap.
+      A node that sends mostly negative edges turns red; mostly positive
+      turns green; mixed lands in the middle.
+    * **Edge color** by sign (negative red, positive green) with mild
+      transparency so dense regions read as texture instead of a solid block.
+    * **Halo'd labels** on the top-degree nodes only; smaller hub names get
+      a white outline so they survive against dense edge tangles.
+    """
+    fig, ax = plt.subplots(figsize=(10.5, 9))
+    fig.patch.set_facecolor("#fafafa")
+    ax.set_facecolor("#fafafa")
+
     if G.number_of_nodes() == 0:
-        ax.set_title(title + " (empty)")
+        ax.set_title(title + "  —  (empty subgraph)", loc="left", fontsize=12)
         ax.axis("off")
         return fig
 
-    pos = nx.spring_layout(G, seed=seed, k=1.5 / max(G.number_of_nodes(), 1) ** 0.4)
+    # Layout: kamada_kawai is more visually balanced for ≤ 200 nodes; fall back
+    # to spring for larger graphs where KK becomes very slow.
+    n_nodes = G.number_of_nodes()
+    if n_nodes <= 200:
+        try:
+            pos = nx.kamada_kawai_layout(nx.DiGraph(G))
+        except Exception:
+            pos = nx.spring_layout(G, seed=seed, k=1.6 / max(n_nodes, 1) ** 0.42, iterations=80)
+    else:
+        pos = nx.spring_layout(G, seed=seed, k=1.6 / max(n_nodes, 1) ** 0.42, iterations=80)
 
-    neg_edges = [(u, v, k) for u, v, k, d in G.edges(keys=True, data=True) if d["label"] == 0]
-    pos_edges = [(u, v, k) for u, v, k, d in G.edges(keys=True, data=True) if d["label"] == 1]
-
-    nx.draw_networkx_nodes(
-        G, pos, ax=ax, node_size=node_size, node_color="#cccccc", edgecolors="black"
+    # Per-node "negative-share" of outgoing edges → continuous color.
+    out_total: dict[str, int] = {n: 0 for n in G.nodes()}
+    out_neg: dict[str, int] = {n: 0 for n in G.nodes()}
+    for u, _v, d in G.edges(data=True):
+        out_total[u] += 1
+        if d["label"] == 0:
+            out_neg[u] += 1
+    neg_share = np.array(
+        [out_neg[n] / out_total[n] if out_total[n] > 0 else 0.5 for n in G.nodes()],
+        dtype=float,
     )
+
+    # Per-node total degree → size. Clamp so isolated nodes are still visible
+    # and hubs don't dominate the canvas.
+    deg = dict(G.degree())
+    deg_arr = np.array([deg[n] for n in G.nodes()], dtype=float)
+    max_deg = max(deg_arr.max(), 1.0)
+    node_sizes = 80 + 480 * (deg_arr / max_deg) ** 0.6
+
+    # Edge buckets — negatives drawn second so they sit on top of positives.
+    pos_edges = [(u, v) for u, v, d in G.edges(data=True) if d["label"] == 1]
+    neg_edges = [(u, v) for u, v, d in G.edges(data=True) if d["label"] == 0]
+
+    # Draw positive edges first (background)
     nx.draw_networkx_edges(
         G,
         pos,
-        edgelist=[(u, v) for u, v, _ in neg_edges],
-        ax=ax,
-        edge_color=NEGATIVE_COLOR,
-        arrows=True,
-        arrowsize=10,
-        width=1.0,
-        alpha=0.85,
-        connectionstyle="arc3,rad=0.08",
-    )
-    nx.draw_networkx_edges(
-        G,
-        pos,
-        edgelist=[(u, v) for u, v, _ in pos_edges],
+        edgelist=pos_edges,
         ax=ax,
         edge_color=POSITIVE_COLOR,
         arrows=True,
-        arrowsize=10,
-        width=1.0,
+        arrowsize=8,
+        arrowstyle="-|>",
+        width=0.9,
+        alpha=0.45,
+        connectionstyle="arc3,rad=0.10",
+        min_target_margin=8,
+    )
+    # Negative edges on top, slightly thicker + more opaque (rare-class focus).
+    nx.draw_networkx_edges(
+        G,
+        pos,
+        edgelist=neg_edges,
+        ax=ax,
+        edge_color=NEGATIVE_COLOR,
+        arrows=True,
+        arrowsize=11,
+        arrowstyle="-|>",
+        width=1.5,
         alpha=0.85,
-        connectionstyle="arc3,rad=0.08",
+        connectionstyle="arc3,rad=0.13",
+        min_target_margin=8,
     )
 
-    # Label only the top-degree nodes to keep the figure readable.
-    deg = dict(G.degree())
-    top_nodes = sorted(deg, key=deg.get, reverse=True)[: min(25, len(deg))]
-    nx.draw_networkx_labels(G, pos, labels={n: n for n in top_nodes}, ax=ax, font_size=7)
+    # Nodes
+    node_collection = nx.draw_networkx_nodes(
+        G,
+        pos,
+        ax=ax,
+        node_size=node_sizes,
+        node_color=neg_share,
+        cmap=plt.cm.RdYlGn_r,
+        vmin=0.0,
+        vmax=1.0,
+        edgecolors="#333",
+        linewidths=0.7,
+    )
 
-    ax.set_title(title)
+    # Labels: only top-K hubs, with a white halo so they're readable on red.
+    k_labels = min(15, n_nodes)
+    top_nodes = sorted(deg, key=deg.get, reverse=True)[:k_labels]
+    text_objs = nx.draw_networkx_labels(
+        G,
+        pos,
+        labels={n: n for n in top_nodes},
+        ax=ax,
+        font_size=8.5,
+        font_weight="semibold",
+    )
+    import matplotlib.patheffects as path_effects
+
+    for t in text_objs.values():
+        t.set_path_effects([path_effects.withStroke(linewidth=2.5, foreground="white", alpha=0.85)])
+
+    n_neg, n_pos = len(neg_edges), len(pos_edges)
+    n_total = max(n_neg + n_pos, 1)
+    ax.set_title(
+        f"{title}  —  {n_nodes} nodes, {n_total} edges ({n_neg / n_total:.1%} negative)",
+        loc="left",
+        fontsize=12,
+    )
     ax.axis("off")
 
-    # Custom legend
+    # Color bar for the node-color scale
+    cbar = fig.colorbar(node_collection, ax=ax, shrink=0.5, pad=0.02, fraction=0.04)
+    cbar.set_label("share of outgoing edges that are negative", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
+
+    # Edge legend
     from matplotlib.lines import Line2D
 
     legend_handles = [
-        Line2D([0], [0], color=NEGATIVE_COLOR, lw=2, label="negative (label=0)"),
-        Line2D([0], [0], color=POSITIVE_COLOR, lw=2, label="neutral/positive (label=1)"),
+        Line2D([0], [0], color=NEGATIVE_COLOR, lw=2.4, label=f"negative edges ({n_neg})"),
+        Line2D(
+            [0], [0], color=POSITIVE_COLOR, lw=1.4, alpha=0.6, label=f"positive edges ({n_pos})"
+        ),
     ]
-    ax.legend(handles=legend_handles, loc="lower right", frameon=True)
+    ax.legend(handles=legend_handles, loc="lower right", frameon=True, fontsize=9)
     fig.tight_layout()
     return fig
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch_geometric.nn import GATv2Conv, GCNConv, SAGEConv, SignedGCN
+from torch_geometric.nn import GATConv, GATv2Conv, GCNConv, SAGEConv, SignedGCN
 
 from reddit_gnn.utils.logging import get_logger
 
@@ -227,6 +227,86 @@ class GATEncoder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# GATv1 (original) — for the static-vs-dynamic-attention comparison vs GATv2.
+# ---------------------------------------------------------------------------
+
+
+class GATv1Encoder(nn.Module):
+    """Same architecture as :class:`GATEncoder` but with the original
+    :class:`torch_geometric.nn.GATConv` instead of :class:`GATv2Conv`.
+
+    The Brody, Alon & Yahav (2022) paper argues GATv1's attention is *static*
+    (the ranking of keys is the same regardless of query); GATv2 makes it
+    *dynamic*. This class lets us run the same config under both attentions
+    to test the claim on this dataset.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_channels: int,
+        out_channels: int,
+        num_layers: int = 2,
+        heads: int = 4,
+        concat: bool | list[bool] = True,
+        dropout: float = 0.5,
+        attn_dropout: float = 0.2,
+        use_batchnorm: bool = False,
+    ) -> None:
+        super().__init__()
+        if num_layers < 1:
+            raise ValueError(f"num_layers must be >= 1, got {num_layers}")
+        if heads < 1:
+            raise ValueError(f"heads must be >= 1, got {heads}")
+        self.dropout = dropout
+        self.heads = heads
+
+        if isinstance(concat, bool):
+            concat_flags = [concat] * num_layers
+        else:
+            if len(concat) != num_layers:
+                raise ValueError(
+                    f"len(concat) must equal num_layers ({num_layers}); got {len(concat)}"
+                )
+            concat_flags = list(concat)
+
+        per_head = max(hidden_channels // heads, 1)
+
+        def layer_out(flag: bool) -> int:
+            return per_head * heads if flag else per_head
+
+        self.convs = nn.ModuleList()
+        self.norms: nn.ModuleList | None = nn.ModuleList() if use_batchnorm else None
+
+        cur_in = in_channels
+        for i in range(num_layers):
+            flag = concat_flags[i]
+            self.convs.append(
+                GATConv(
+                    cur_in,
+                    per_head,
+                    heads=heads,
+                    concat=flag,
+                    dropout=attn_dropout,
+                )
+            )
+            cur_in = layer_out(flag)
+            if self.norms is not None:
+                self.norms.append(nn.BatchNorm1d(cur_in))
+
+        self.out_proj = nn.Linear(cur_in, out_channels)
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        h = x
+        for i, conv in enumerate(self.convs):
+            h_in = h
+            h = conv(h, edge_index)
+            norm = self.norms[i] if self.norms is not None else None
+            h = _apply_block(h, h_in, norm, self.dropout, self.training, activation="elu")
+        return self.out_proj(h)
+
+
+# ---------------------------------------------------------------------------
 # SignedGCN
 # ---------------------------------------------------------------------------
 
@@ -299,4 +379,4 @@ class SignedGCNEncoder(nn.Module):
         return self.signed(x_proj, pos_edge_index, neg_edge_index)
 
 
-__all__ = ["GATEncoder", "GCNEncoder", "SAGEEncoder", "SignedGCNEncoder"]
+__all__ = ["GATEncoder", "GATv1Encoder", "GCNEncoder", "SAGEEncoder", "SignedGCNEncoder"]

@@ -73,6 +73,7 @@ def build_torch_model(
     from reddit_gnn.models.decoders import EdgeMLPDecoder
     from reddit_gnn.models.encoders import (
         GATEncoder,
+        GATv1Encoder,
         GCNEncoder,
         SAGEEncoder,
         SignedGCNEncoder,
@@ -129,6 +130,19 @@ def build_torch_model(
             use_batchnorm=bool(enc_cfg.get("use_batchnorm", False)),
         )
         node_dim_for_decoder = int(enc_cfg.get("out_channels", 64))
+    elif model_type == "gat_v1":
+        encoder = GATv1Encoder(
+            in_channels=node_feature_dim,
+            hidden_channels=int(enc_cfg.get("hidden_channels", 128)),
+            out_channels=int(enc_cfg.get("out_channels", 64)),
+            num_layers=int(enc_cfg.get("num_layers", 2)),
+            heads=int(enc_cfg.get("heads", 4)),
+            concat=enc_cfg.get("concat", True),
+            dropout=float(enc_cfg.get("dropout", 0.5)),
+            attn_dropout=float(enc_cfg.get("attn_dropout", 0.2)),
+            use_batchnorm=bool(enc_cfg.get("use_batchnorm", False)),
+        )
+        node_dim_for_decoder = int(enc_cfg.get("out_channels", 64))
     elif model_type == "signed_gcn":
         encoder = SignedGCNEncoder(
             in_channels=node_feature_dim,
@@ -141,7 +155,7 @@ def build_torch_model(
     else:
         raise ValueError(
             f"Unknown model type {model_type!r}; expected one of "
-            "{baseline_mlp, gcn, sage, gat, signed_gcn}"
+            "{baseline_mlp, gcn, sage, gat, gat_v1, signed_gcn}"
         )
 
     decoder = EdgeMLPDecoder(

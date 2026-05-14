@@ -1,0 +1,39 @@
+defaults: configs/base.yaml
+
+run:
+  name: gat_lr1e-4
+
+# GATv2 (gat-fix) variant with substantially lower LR.
+#
+# Motivation: gat-fix exhibited a deterministic peak-and-decay across all
+# 3 seeds — each climbed to val_pr_auc ≈ 0.15 around epoch 30-45, then
+# decayed back toward ≈ 0.12 before early-stopping. Diagnosis: post-warmup
+# LR of 5e-4 is too high to *hold* the basin once found; ReduceLROnPlateau
+# with patience=20 doesn't kick in fast enough to save it.
+#
+# This config drops the starting LR 5x (5e-4 → 1e-4) and removes warmup
+# (no first-step explosion at the lower LR). If the new peaks hold past
+# epoch 30, the GAT row in the leaderboard moves up accordingly.
+model:
+  type: gat
+  encoder:
+    in_channels: null
+    hidden_channels: 128
+    out_channels: 64
+    num_layers: 2
+    heads: 1
+    concat: false
+    dropout: 0.5
+    attn_dropout: 0.0
+    use_batchnorm: true
+  decoder:
+    type: edge_mlp
+    hidden: 64
+    dropout: 0.3
+
+training:
+  epochs: 200
+  lr: 0.0001                     # was 5e-4 in gat.yaml; 5x lower to hold the peak
+  weight_decay: 0.0005
+  early_stopping_patience: 40
+  warmup_epochs: 0               # no warmup needed at this LR

@@ -413,13 +413,18 @@ def plot_cross_metric_comparison(
     ``test_roc_auc``, ``test_balanced_accuracy``, ``test_mcc``,
     ``test_f1_macro``, ``test_f1_negative_class``, ``class_prior_negative``).
     """
+    # Panel layout is organised around the headline "negative class" story:
+    # the top row is negative-class-specific metrics (headline PR-AUC, F1,
+    # precision, recall — all interpreted with class 0 as the positive case),
+    # the bottom row is symmetric metrics that don't care which class is which
+    # (ROC-AUC, MCC) plus the supporting F1-macro for cross-checking.
     panel = [
-        ("test_pr_auc_neg", "PR-AUC (negative class)", "Headline metric"),
-        ("test_roc_auc", "ROC-AUC", "Class-symmetric"),
-        ("test_balanced_accuracy", "Balanced accuracy", "(TPR + TNR) / 2"),
-        ("test_mcc", "MCC", "Matthews correlation"),
-        ("test_f1_macro", "F1 (macro)", "Averaged across classes"),
-        ("test_f1_negative_class", "F1 on negative class", "Rare class only"),
+        ("test_pr_auc_neg", "PR-AUC (negative class)", "Headline + lift over prior"),
+        ("test_f1_negative_class", "F1 on negative class", "Companion headline metric"),
+        ("test_precision_negative", "Precision (negative class)", "At threshold = 0.5"),
+        ("test_recall_negative", "Recall (negative class)", "At threshold = 0.5"),
+        ("test_roc_auc", "ROC-AUC", "Symmetric in class label"),
+        ("test_mcc", "MCC", "Symmetric correlation [-1, 1]"),
     ]
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     axes_flat = axes.flatten()
@@ -495,21 +500,25 @@ def plot_cross_model_confusion_grid(
     *,
     seed: int = 0,
     save_path: str | Path | None = None,
+    pred_paths_by_model: Mapping[str, Path] | None = None,
 ) -> Figure:
     """1xN grid of test-split confusion matrices, one per model.
 
-    Reads ``predictions_dir / <model>-seed{seed}.csv`` for every model present
-    in ``comparison_df`` (in that table's sort order — typically descending
-    ``test_pr_auc_neg``), filters to the test split, builds a 2x2 confusion
-    matrix, and plots them on a shared color scale. Each subplot is titled
-    with the model name and its ``test_pr_auc_neg`` from ``comparison_df``.
-    Cells are annotated with raw count + percent.
+    Reads each model's seed-`seed` predictions CSV. By default looks for
+    ``predictions_dir / <model>-seed{seed}.csv``; pass ``pred_paths_by_model``
+    to override the file mapping (used when the leaderboard row for a model
+    came from a hotfix-tagged run, e.g. ``sage-h64-seed0.csv``). Each subplot
+    is titled with the model name and its ``test_pr_auc_neg`` from
+    ``comparison_df``. Cells are annotated with raw count + percent.
     """
     models = comparison_df["model"].tolist()
     cms: dict[str, np.ndarray] = {}
     pr_aucs: dict[str, float] = {}
     for m in models:
-        csv = Path(predictions_dir) / f"{m}-seed{seed}.csv"
+        if pred_paths_by_model is not None and m in pred_paths_by_model:
+            csv = Path(pred_paths_by_model[m])
+        else:
+            csv = Path(predictions_dir) / f"{m}-seed{seed}.csv"
         if not csv.exists():
             continue
         df = pd.read_csv(csv)
@@ -573,4 +582,207 @@ def plot_cross_model_confusion_grid(
                 )
     fig.colorbar(im, ax=axes, fraction=0.035, pad=0.04)
     fig.suptitle("Test-split confusion matrices (seed 0 of each model)", fontsize=11, y=1.02)
+    return _maybe_save(fig, save_path)
+
+
+def plot_cross_model_pr_curves(
+    predictions_dir: Path,
+    comparison_df: pd.DataFrame,
+    *,
+    seed: int = 0,
+    save_path: str | Path | None = None,
+    pred_paths_by_model: Mapping[str, Path] | None = None,
+) -> Figure:
+    """Overlay PR curves for the negative class across all models on one axis.
+
+    Reads each model's seed-`seed` predictions CSV, computes PR on the negative
+    class (score = 1 - p_class1), and overlays the curves with each model's
+    test PR-AUC-neg in the legend. The class-prior baseline gets a dashed line.
+    Pass ``pred_paths_by_model`` to override the default filename lookup (used
+    when the leaderboard row for a model is sourced from a hotfix-tagged run).
+    """
+    from sklearn.metrics import average_precision_score, precision_recall_curve
+
+    models = comparison_df["model"].tolist()
+    fig, ax = plt.subplots(figsize=(7, 5))
+    palette = plt.cm.tab10(np.linspace(0, 1, max(len(models), 3)))
+    prior_neg: float | None = None
+
+    for color, m in zip(palette, models, strict=False):
+        if pred_paths_by_model is not None and m in pred_paths_by_model:
+            csv = Path(pred_paths_by_model[m])
+        else:
+            csv = Path(predictions_dir) / f"{m}-seed{seed}.csv"
+        if not csv.exists():
+            continue
+        df = pd.read_csv(csv)
+        sub = df[df["split"] == "test"]
+        if sub.empty:
+            continue
+        y_true = sub["y_true"].to_numpy().astype(int)
+        y_score = sub["y_score"].to_numpy().astype(float)
+        y_neg_true = (y_true == 0).astype(int)
+        y_neg_score = 1.0 - y_score
+        precision, recall, _ = precision_recall_curve(y_neg_true, y_neg_score)
+        ap = average_precision_score(y_neg_true, y_neg_score)
+        ax.plot(recall, precision, lw=2, color=color, label=f"{m}: AP={ap:.3f}")
+        if prior_neg is None:
+            prior_neg = float(y_neg_true.mean())
+
+    if prior_neg is not None:
+        ax.axhline(
+            prior_neg,
+            color="grey",
+            linestyle="--",
+            lw=1.2,
+            label=f"class prior = {prior_neg:.3f}",
+        )
+
+    ax.set_xlabel("recall (negative class)")
+    ax.set_ylabel("precision (negative class)")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_title(f"PR curves on the negative class (seed = {seed})")
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    return _maybe_save(fig, save_path)
+
+
+def plot_cross_model_roc_curves(
+    predictions_dir: Path,
+    comparison_df: pd.DataFrame,
+    *,
+    seed: int = 0,
+    save_path: str | Path | None = None,
+    pred_paths_by_model: Mapping[str, Path] | None = None,
+) -> Figure:
+    """Overlay ROC curves across all models on one axis.
+
+    Pass ``pred_paths_by_model`` to override the default filename lookup.
+    """
+    from sklearn.metrics import roc_auc_score, roc_curve
+
+    models = comparison_df["model"].tolist()
+    fig, ax = plt.subplots(figsize=(7, 5))
+    palette = plt.cm.tab10(np.linspace(0, 1, max(len(models), 3)))
+
+    for color, m in zip(palette, models, strict=False):
+        if pred_paths_by_model is not None and m in pred_paths_by_model:
+            csv = Path(pred_paths_by_model[m])
+        else:
+            csv = Path(predictions_dir) / f"{m}-seed{seed}.csv"
+        if not csv.exists():
+            continue
+        df = pd.read_csv(csv)
+        sub = df[df["split"] == "test"]
+        if sub.empty:
+            continue
+        y_true = sub["y_true"].to_numpy().astype(int)
+        y_score = sub["y_score"].to_numpy().astype(float)
+        fpr, tpr, _ = roc_curve(y_true, y_score)
+        auc = roc_auc_score(y_true, y_score)
+        ax.plot(fpr, tpr, lw=2, color=color, label=f"{m}: AUC={auc:.3f}")
+
+    ax.plot([0, 1], [0, 1], color="black", linestyle="--", lw=1, alpha=0.5, label="chance")
+    ax.set_xlabel("false positive rate")
+    ax.set_ylabel("true positive rate")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_title(f"ROC curves (seed = {seed})")
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    return _maybe_save(fig, save_path)
+
+
+def plot_threshold_tradeoff(
+    predictions_dir: Path,
+    model: str,
+    *,
+    seed: int = 0,
+    save_path: str | Path | None = None,
+    predictions_csv: Path | None = None,
+) -> Figure:
+    """Precision / recall / F1 on the negative class as a function of threshold.
+
+    The reader can pick an operating point by tracing a vertical line at any
+    threshold. The default 0.5 threshold gets a vertical marker. Pass
+    ``predictions_csv`` to override the default ``predictions_dir/<model>-seed<seed>.csv``
+    lookup (e.g. when sourcing from a hotfix-tagged run).
+    """
+    from sklearn.metrics import precision_recall_curve
+
+    csv = (
+        Path(predictions_csv)
+        if predictions_csv is not None
+        else Path(predictions_dir) / f"{model}-seed{seed}.csv"
+    )
+    if not csv.exists():
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.text(0.5, 0.5, f"predictions for {model}-seed{seed} not found", ha="center")
+        ax.axis("off")
+        return _maybe_save(fig, save_path)
+    df = pd.read_csv(csv)
+    sub = df[df["split"] == "test"]
+    y_true = sub["y_true"].to_numpy().astype(int)
+    y_score = sub["y_score"].to_numpy().astype(float)
+    y_neg_true = (y_true == 0).astype(int)
+    y_neg_score = 1.0 - y_score
+    precision, recall, thr = precision_recall_curve(y_neg_true, y_neg_score)
+    # precision_recall_curve returns one fewer threshold than precision/recall
+    precision, recall = precision[:-1], recall[:-1]
+    f1 = np.where((precision + recall) > 0, 2 * precision * recall / (precision + recall), 0.0)
+    # thr is "score >= thr predicts positive in PR convention" — convert back
+    # to the original threshold on p_class1: decision_threshold_on_p1 = 1 - thr.
+    decision_thresh = 1.0 - thr
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    order = np.argsort(decision_thresh)
+    ax.plot(
+        decision_thresh[order], precision[order], lw=2, label="precision (neg)", color="#4c72b0"
+    )
+    ax.plot(decision_thresh[order], recall[order], lw=2, label="recall (neg)", color="#dd8452")
+    ax.plot(decision_thresh[order], f1[order], lw=2, label="F1 (neg)", color="#55a868")
+    ax.axvline(0.5, color="grey", linestyle="--", lw=1, alpha=0.7, label="threshold = 0.5")
+
+    ax.set_xlabel("decision threshold on p(class=1)  —  predict 0 if p < threshold")
+    ax.set_ylabel("metric value on the negative class")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_title(f"Negative-class precision / recall / F1 vs. threshold — {model}-seed{seed}")
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.legend(loc="upper right", fontsize=9)
+    fig.tight_layout()
+    return _maybe_save(fig, save_path)
+
+
+def plot_seed_trajectories(
+    history_paths: Mapping[str, Path],
+    *,
+    metric: str = "val_pr_auc",
+    save_path: str | Path | None = None,
+) -> Figure:
+    """Overlay per-epoch trajectories of `metric` across seeds for one model.
+
+    `history_paths` maps a label (e.g. "seed 0") to the path of its
+    `history_*.csv`. Useful for showing seed-level convergence/divergence
+    side-by-side (e.g. before-vs-after the warmup fix).
+    """
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    palette = plt.cm.tab10(np.linspace(0, 1, max(len(history_paths), 3)))
+    for color, (label, path) in zip(palette, history_paths.items(), strict=False):
+        path = Path(path)
+        if not path.exists():
+            continue
+        df = pd.read_csv(path)
+        if metric not in df.columns:
+            continue
+        ax.plot(df["epoch"], df[metric], lw=1.5, color=color, label=label)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel(metric)
+    ax.grid(True, linestyle=":", alpha=0.4)
+    ax.set_title(f"Per-epoch {metric} across seeds")
+    ax.legend(loc="best", fontsize=9)
+    fig.tight_layout()
     return _maybe_save(fig, save_path)

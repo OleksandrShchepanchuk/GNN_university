@@ -16,3 +16,8 @@ training:
   lr: 0.001
   weight_decay: 0.0001
   early_stopping_patience: 15
+  # 5-epoch linear warmup. Without it, the first BCE+pos_weight gradient step
+  # blew the loss up to ~180-250 (vs ~1 for the GNNs) and the optimizer
+  # converged to the prior within 4 epochs on 2 of 3 seeds. Warmup lets the
+  # 2029-d -> 256-d FC layer settle before applying full LR.
+  warmup_epochs: 5

@@ -56,10 +56,13 @@ from reddit_gnn.visualization.results import (
     plot_confusion_matrix,
     plot_cross_metric_comparison,
     plot_cross_model_confusion_grid,
+    plot_cross_model_pr_curves,
+    plot_cross_model_roc_curves,
     plot_error_by_degree_bin,
     plot_model_comparison,
     plot_pr_roc,
     plot_predicted_subgraph,
+    plot_threshold_tradeoff,
 )
 
 app = typer.Typer(add_completion=False, help=__doc__)
@@ -290,10 +293,35 @@ def _build_comparison(runs: list[dict[str, Any]]) -> pd.DataFrame:
 
     seed_pattern = _re.compile(r"-seed\d+$")
 
+    # When a model has both the original `<model>-seed{0,1,2}` series AND a
+    # newer hotfix series (e.g. `sage-h64-seed{0,1,2}` after the seed-stability
+    # fix), prefer the hotfix series — the bug investigation that produced
+    # them is the authoritative configuration we want reported in the
+    # leaderboard. Listed in priority order: leftmost tag wins per model_type.
+    PREFERRED_TAGS = {
+        "sage": ["-h64-"],
+        "gat": ["-fix-"],
+        # GATv1's warmup=25 series escaped the lottery-init pattern; report it
+        # as a separate leaderboard row from the GATv2 entry so the static-vs-
+        # dynamic-attention comparison sits inside the same table.
+        "gat_v1": ["-warmup25-", "-fix-"],
+        "signed_gcn": ["-warmup-"],
+        "baseline_mlp": ["-warmup-"],
+    }
+
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in runs:
         if seed_pattern.search(r["run_name"]):
             grouped[r["model_type"]].append(r)
+
+    for mt, tags in PREFERRED_TAGS.items():
+        if mt not in grouped:
+            continue
+        for tag in tags:
+            preferred = [g for g in grouped[mt] if tag in g["run_name"]]
+            if preferred:
+                grouped[mt] = preferred
+                break
 
     def _seed_arr(group, split_name: str, key: str) -> np.ndarray:
         return np.array(
@@ -479,6 +507,30 @@ def main(
     comparison.to_csv(comparison_path, index=False)
     log.info("Wrote %s (%d row(s))", comparison_path, len(comparison))
 
+    # Build a {model_type -> seed-0 predictions CSV path} mapping that respects
+    # the same preferred-tag filter `_build_comparison` applied (so confusion
+    # / PR / ROC plots use the hotfix-tagged runs when present).
+    import re as _re2
+
+    _seed_pat = _re2.compile(r"-seed(\d+)$")
+    pred_paths_by_model: dict[str, Path] = {}
+    for r in runs:
+        m = _seed_pat.search(r["run_name"])
+        if not m or int(m.group(1)) != 0:
+            continue
+        mt = r["model_type"]
+        if mt in comparison["model"].tolist():
+            # Prefer the same hotfix tag the comparison row was built from.
+            # Heuristic: pick the run whose name appears in any predictions
+            # CSV that exists; otherwise fall back to bare seed0.
+            pred = predictions_dir / f"{r['run_name']}.csv"
+            if pred.exists():
+                # If this is a hotfix run, it wins; otherwise keep whatever we have
+                # unless nothing is set yet.
+                is_hotfix = any(t.strip("-") in r["run_name"] for t in ["h64", "warmup", "fix"])
+                if is_hotfix or mt not in pred_paths_by_model:
+                    pred_paths_by_model[mt] = pred
+
     if not comparison.empty:
         plot_model_comparison(
             comparison.rename(columns={"test_pr_auc_neg": "pr_auc_neg"}),
@@ -505,7 +557,39 @@ def main(
             predictions_dir,
             comparison,
             seed=0,
+            pred_paths_by_model=pred_paths_by_model,
             save_path=figures_dir / "confusion_grid_all_models.png",
+        )
+        plt.close("all")
+
+        # Cross-model PR curves on the negative class (overlay).
+        plot_cross_model_pr_curves(
+            predictions_dir,
+            comparison,
+            seed=0,
+            pred_paths_by_model=pred_paths_by_model,
+            save_path=figures_dir / "cross_model_pr_curves.png",
+        )
+        plt.close("all")
+
+        # Cross-model ROC curves (overlay).
+        plot_cross_model_roc_curves(
+            predictions_dir,
+            comparison,
+            seed=0,
+            pred_paths_by_model=pred_paths_by_model,
+            save_path=figures_dir / "cross_model_roc_curves.png",
+        )
+        plt.close("all")
+
+        # Threshold trade-off plot for the winning model.
+        winner = comparison.iloc[0]["model"]
+        plot_threshold_tradeoff(
+            predictions_dir,
+            winner,
+            seed=0,
+            predictions_csv=pred_paths_by_model.get(winner),
+            save_path=figures_dir / f"threshold_tradeoff_{winner}.png",
         )
         plt.close("all")
 

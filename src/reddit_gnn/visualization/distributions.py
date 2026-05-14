@@ -9,7 +9,12 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 
-from reddit_gnn.visualization import NEGATIVE_COLOR, POSITIVE_COLOR, _maybe_save
+from reddit_gnn.visualization import (
+    NEGATIVE_COLOR,
+    POSITIVE_COLOR,
+    PRIMARY_COLOR,
+    _maybe_save,
+)
 
 
 def plot_label_distribution(
@@ -23,26 +28,35 @@ def plot_label_distribution(
     n_pos = int(counts.get(1, 0))
     total = max(n_neg + n_pos, 1)
 
-    fig, ax = plt.subplots(figsize=(5.5, 4))
+    fig, ax = plt.subplots(figsize=(6.0, 4.2))
+    labels = ["negative\n(label = 0)", "neutral / positive\n(label = 1)"]
     bars = ax.bar(
-        ["negative (0)", "neutral/positive (1)"],
+        labels,
         [n_neg, n_pos],
         color=[NEGATIVE_COLOR, POSITIVE_COLOR],
-        edgecolor="black",
+        edgecolor="white",
+        linewidth=1.5,
+        width=0.6,
     )
     for bar, count in zip(bars, (n_neg, n_pos), strict=True):
+        pct = count / total
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height(),
-            f"{count:,}\n({count / total:.1%})",
+            f"{count:,}\n{pct:.1%}",
             ha="center",
             va="bottom",
-            fontsize=10,
+            fontsize=11,
+            fontweight="semibold",
+            color="#222",
         )
     ax.set_ylabel("edge count")
-    ax.set_title("Edge label distribution")
-    ax.set_ylim(0, max(n_neg, n_pos) * 1.18)
-    ax.grid(axis="y", linestyle=":", alpha=0.4)
+    ax.set_title(
+        f"Edge label distribution  —  {total:,} edges, {n_neg / total:.1%} negative (rare-class)",
+        loc="left",
+    )
+    ax.set_ylim(0, max(n_neg, n_pos) * 1.22)
+    # Suppress the default tick labels on Y in favour of the per-bar annotations.
     fig.tight_layout()
     return _maybe_save(fig, save_path)
 
@@ -60,23 +74,32 @@ def plot_degree_distribution(
     if deg.size == 0:
         deg = np.array([0])
 
-    fig, ax = plt.subplots(figsize=(6.5, 4))
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
     if log_scale:
         nonzero = deg[deg > 0]
         if nonzero.size == 0:
             nonzero = np.array([1])
         edges = np.logspace(0, np.log10(nonzero.max() + 1), bins)
-        ax.hist(deg + 1, bins=edges, color="#4c72b0", edgecolor="black", alpha=0.85)
+        ax.hist(
+            deg + 1, bins=edges, color=PRIMARY_COLOR, edgecolor="white", linewidth=0.4, alpha=0.92
+        )
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel(f"{degree_type} degree + 1 (log)")
-        ax.set_ylabel("number of nodes (log)")
+        ax.set_xlabel(f"{degree_type} degree + 1 (log scale)")
+        ax.set_ylabel("number of nodes (log scale)")
+        ax.grid(True, which="both", linestyle=":", alpha=0.35)
     else:
-        ax.hist(deg, bins=bins, color="#4c72b0", edgecolor="black", alpha=0.85)
+        ax.hist(deg, bins=bins, color=PRIMARY_COLOR, edgecolor="white", linewidth=0.4, alpha=0.92)
         ax.set_xlabel(f"{degree_type} degree")
         ax.set_ylabel("number of nodes")
-    ax.set_title(f"{degree_type.capitalize()}-degree distribution")
-    ax.grid(True, linestyle=":", alpha=0.4)
+
+    median_deg = float(np.median(deg))
+    max_deg = int(deg.max())
+    ax.set_title(
+        f"{degree_type.capitalize()}-degree distribution  —  "
+        f"median = {median_deg:.0f}, max = {max_deg:,}, n = {deg.size:,}",
+        loc="left",
+    )
     fig.tight_layout()
     return _maybe_save(fig, save_path)
 
@@ -102,11 +125,26 @@ def plot_top_subreddits_by_degree(
         deg = in_deg.add(out_deg, fill_value=0).astype(int)
     top = deg.sort_values(ascending=False).head(top_k)
 
-    fig, ax = plt.subplots(figsize=(7, 0.4 * len(top) + 1.5))
-    ax.barh(top.index[::-1], top.values[::-1], color="#4c72b0", edgecolor="black")
+    fig, ax = plt.subplots(figsize=(8, 0.36 * len(top) + 1.5))
+    values = top.values[::-1]
+    labels = top.index[::-1]
+    bars = ax.barh(
+        labels, values, color=PRIMARY_COLOR, edgecolor="white", linewidth=0.6, alpha=0.92
+    )
+    for bar, value in zip(bars, values, strict=True):
+        ax.text(
+            bar.get_width(),
+            bar.get_y() + bar.get_height() / 2,
+            f"  {int(value):,}",
+            va="center",
+            fontsize=9,
+            color="#333",
+        )
     ax.set_xlabel("edge count")
-    ax.set_title(f"Top-{top_k} subreddits by {mode} degree")
+    mode_label = {"in": "incoming", "out": "outgoing", "total": "total"}[mode]
+    ax.set_title(f"Top-{top_k} subreddits by {mode_label}-edge count", loc="left")
     ax.grid(axis="x", linestyle=":", alpha=0.4)
+    ax.set_axisbelow(True)
     fig.tight_layout()
     return _maybe_save(fig, save_path)
 

@@ -231,6 +231,7 @@ def fit(
     patience = int(train_cfg.get("early_stopping_patience", 10))
     clip_value = float(train_cfg.get("grad_clip", 1.0))
     device = torch.device(train_cfg.get("device", "cpu"))
+    warmup_epochs = int(train_cfg.get("warmup_epochs", 0))
 
     model = model.to(device)
     for loader in loaders.values():
@@ -253,6 +254,20 @@ def fit(
         patience=max(patience // 2, 1),
         min_lr=1e-6,
     )
+    warmup_scheduler = None
+    if warmup_epochs > 0:
+        # Linear warmup keeps the first step from over-correcting under the
+        # ~9.5x class weight (BCEWithLogits pos_weight = #neg/#pos). We do
+        # NOT use SequentialLR because ReduceLROnPlateau is metric-stepped
+        # rather than epoch-stepped; instead we manually step warmup_scheduler
+        # for the first `warmup_epochs` and only then begin plateau-stepping.
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=1.0 / warmup_epochs,
+            end_factor=1.0,
+            total_iters=warmup_epochs,
+        )
+        log.info("fit: LR warmup enabled for %d epochs", warmup_epochs)
 
     val_loader = loaders.get("val")
     if val_loader is None:
@@ -273,7 +288,10 @@ def fit(
         val_pr_auc = float(val_metrics["pr_auc"])
         val_pr_auc_safe = -float("inf") if np.isnan(val_pr_auc) else val_pr_auc
 
-        scheduler.step(val_pr_auc_safe)
+        if warmup_scheduler is not None and epoch <= warmup_epochs:
+            warmup_scheduler.step()
+        else:
+            scheduler.step(val_pr_auc_safe)
         lr_now = float(optimizer.param_groups[0]["lr"])
 
         elapsed = time.perf_counter() - t0

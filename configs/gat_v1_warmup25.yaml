@@ -1,0 +1,38 @@
+defaults: configs/base.yaml
+
+run:
+  name: gat_v1_warmup25
+
+# GATv1 variant with longer warmup.
+#
+# Motivation: gat_v1-fix (warmup=10) showed a lottery-init pattern — 2 of 3
+# seeds plateaued at ~0.14 within 30 epochs (never escaped the class-prior
+# basin), 1 seed climbed steadily to 0.24. GATv1's static attention locks
+# in early; with a bad init the model stays stuck.
+#
+# Hypothesis: a longer LR ramp (25 epochs vs 10) gives the optimizer more
+# room to settle into a good attention pattern before full LR allows it
+# to over-commit to wrong neighbor rankings.
+model:
+  type: gat_v1
+  encoder:
+    in_channels: null
+    hidden_channels: 128
+    out_channels: 64
+    num_layers: 2
+    heads: 1
+    concat: false
+    dropout: 0.5
+    attn_dropout: 0.0
+    use_batchnorm: true
+  decoder:
+    type: edge_mlp
+    hidden: 64
+    dropout: 0.3
+
+training:
+  epochs: 200
+  lr: 0.0005
+  weight_decay: 0.0005
+  early_stopping_patience: 40
+  warmup_epochs: 25              # was 10 in gat_v1.yaml — 2.5x longer ramp

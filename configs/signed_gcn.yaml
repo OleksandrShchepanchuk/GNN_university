@@ -23,3 +23,8 @@ training:
   lr: 0.005                      # safer than 0.01 — SignedGCN with no BN can diverge
   weight_decay: 0.00001
   early_stopping_patience: 20
+  # 10-epoch linear warmup from lr/10 to lr. With pos_weight ~ 9.5x and no
+  # batchnorm in SignedGCN, the seed-0 run touched val_pr_auc 0.17 at epoch
+  # 39 then collapsed back to the class prior — exactly the unstable-near-
+  # the-edge pattern that a small early-LR fixes. See README "Limitations".
+  warmup_epochs: 10

@@ -10,11 +10,17 @@ model:
     hidden_channels: 128         # total post-concat width per layer
     out_channels: 64
     num_layers: 2
-    heads: 2                     # was 4; cuts initial-logit magnitude in half
-    concat: true                 # also accepts a list[bool] of length num_layers
+    heads: 1                     # was 2 then 4; single head removes one source
+                                 # of variance and gives the optimizer a smaller
+                                 # landscape during warmup.
+    concat: false                # heads=1 + concat=false: per-head out is the
+                                 # whole hidden_channels, no concat post-step.
     dropout: 0.5
-    attn_dropout: 0.2            # confirmed wired in encoders.GATEncoder
-    use_batchnorm: false
+    attn_dropout: 0.0            # was 0.2; attn dropout on top of feature
+                                 # dropout 0.5 was over-regularising attention
+                                 # toward uniform (= no-op aggregation).
+    use_batchnorm: true          # was false; BN keeps layer-2 activations from
+                                 # drifting once warmup hands off to plateau.
   decoder:
     type: edge_mlp
     hidden: 64
@@ -22,11 +28,13 @@ model:
 
 training:
   epochs: 200
-  lr: 0.0005                     # was 0.003; previous LR + 4-head attention
-                                 # produced train_loss ≈ 2231 at epoch 1 and
-                                 # then a degenerate "predict-majority" optimum
-                                 # GAT couldn't escape — reducing to 5e-4
-                                 # keeps the first step from over-correcting.
+  lr: 0.0005                     # was 0.003; previous LR alone failed because
+                                 # train_loss at epoch 1 was ~3000+ even after
+                                 # the lr cut and head reduction. The fix is
+                                 # warmup_epochs below (LR scaled from lr/10 to
+                                 # lr linearly over the first 10 epochs) plus
+                                 # heads=1, attn_dropout=0, batchnorm=true.
   weight_decay: 0.0005
   early_stopping_patience: 40    # was 20; doubles the budget for escaping
                                  # the first-epoch degenerate optimum.
+  warmup_epochs: 10

@@ -7,7 +7,14 @@ model:
   type: sage
   encoder:
     in_channels: null
-    hidden_channels: 128
+    # Reduced from 128 to 64 after seed-stability investigation. With
+    # hidden=128, sage-seed0 stayed pinned at val_pr_auc ~ 0.13 (class
+    # prior) for 37 epochs before early-stopping fired, while seeds 1/2
+    # reached 0.50+. Hypothesis: SAGE concat-then-project widens the
+    # inner activation to 2*hidden=256, landing one of three inits in a
+    # saddle the optimizer can't escape under the 9.5x class weight.
+    # h=64 halves the inner width and stabilises across seeds.
+    hidden_channels: 64
     out_channels: 64
     num_layers: 2
     dropout: 0.5
